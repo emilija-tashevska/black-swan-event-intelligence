@@ -8,7 +8,7 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 
 # GitHub Pages repo name — used as basePath so assets resolve correctly.
 # Change this if your repo has a different name.
-REPO_NAME="black-swan-events"
+REPO_NAME="black-swan-event-intelligence"
 
 echo "=== Black Swan Analytics — Update & Deploy ==="
 echo ""
