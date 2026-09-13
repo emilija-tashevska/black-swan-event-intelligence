@@ -1,0 +1,65 @@
+{
+ "cursor": "",
+ "trades": [
+  {
+   "count_fp": "160.00",
+   "created_time": "2026-01-24T23:09:39.719146Z",
+   "is_block_trade": false,
+   "no_price_dollars": "0.9300",
+   "taker_book_side": "bid",
+   "taker_outcome_side": "yes",
+   "taker_side": "yes",
+   "ticker": "KXBTCMINMON-BTC-26JAN31-77500",
+   "trade_id": "b6dd6460-1908-6cd8-fd5e-c9b4f5f4341d",
+   "yes_price_dollars": "0.0700"
+  },
+  {
+   "count_fp": "13.00",
+   "created_time": "2026-01-24T23:07:31.44847Z",
+   "is_block_trade": false,
+   "no_price_dollars": "0.9300",
+   "taker_book_side": "bid",
+   "taker_outcome_side": "yes",
+   "taker_side": "yes",
+   "ticker": "KXBTCMINMON-BTC-26JAN31-77500",
+   "trade_id": "10df803e-76e0-53d0-76fe-8c73c1727e41",
+   "yes_price_dollars": "0.0700"
+  },
+  {
+   "count_fp": "1.00",
+   "created_time": "2026-01-24T21:25:25.205185Z",
+   "is_block_trade": false,
+   "no_price_dollars": "0.9800",
+   "taker_book_side": "bid",
+   "taker_outcome_side": "yes",
+   "taker_side": "yes",
+   "ticker": "KXBTCMINMON-BTC-26JAN31-77500",
+   "trade_id": "ee96d056-6620-5da2-1cf1-75779fd8473d",
+   "yes_price_dollars": "0.0200"
+  },
+  {
+   "count_fp": "200.00",
+   "created_time": "2026-01-24T21:25:25.205185Z",
+   "is_block_trade": false,
+   "no_price_dollars": "0.9600",
+   "taker_book_side": "bid",
+   "taker_outcome_side": "yes",
+   "taker_side": "yes",
+   "ticker": "KXBTCMINMON-BTC-26JAN31-77500",
+   "trade_id": "e5a226d3-e9f6-55c8-05dd-0e6de9974506",
+   "yes_price_dollars": "0.0400"
+  },
+  {
+   "count_fp": "93.00",
+   "created_time": "2026-01-24T21:25:25.205185Z",
+   "is_block_trade": false,
+   "no_price_dollars": "0.9800",
+   "taker_book_side": "bid",
+   "taker_outcome_side": "yes",
+   "taker_side": "yes",
+   "ticker": "KXBTCMINMON-BTC-26JAN31-77500",
+   "trade_id": "ae8b405c-334a-55a4-1eaa-88fe80085a96",
+   "yes_price_dollars": "0.0200"
+  }
+ ]
+}

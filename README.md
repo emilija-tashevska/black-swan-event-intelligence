@@ -1,115 +1,112 @@
 # Black Swan Event Intelligence
 
-Analytics engine that identifies when prediction markets were wrong. Scans [Kalshi](https://kalshi.com) markets for events that resolved **YES** despite having low implied probability — the definition of a black swan.
+**When were prediction markets wrong?** This project scans every settled [Kalshi](https://kalshi.com) market, reconstructs what traders believed a week before each market closed, and surfaces the events that happened anyway: outcomes the crowd priced below 10% (configurable up to 25%) that resolved **YES**.
 
-## What it does
+**Live dashboard:** https://emilija-tashevska.github.io/black-swan-event-intelligence/
 
-1. **Collects** settled markets from Kalshi's public API (live + historical endpoints)
-2. **Enriches** each market with its implied probability 7 days before close using daily candlestick data
-3. **Filters** for black swans: events where the 7-day-prior price was below a configurable threshold (default 10%)
-4. **Categorizes** markets (Crypto, Finance, Weather, Politics, Entertainment, etc.) and generates concise AI summaries via Gemini
-5. **Analyzes** trade depth — how many contracts actually traded at the low implied probability
+<!-- RESULTS:START -->
+<!-- RESULTS:END -->
 
-## Dashboard
+## How it works
 
-The frontend provides:
+```mermaid
+flowchart LR
+    A[Kalshi public API] -->|settled markets<br/>live + archive| B[Collect]
+    B -->|liquid, non-sports| DB[(SQLite)]
+    DB --> C[Score<br/>7-day-prior price]
+    C --> D[Depth<br/>trades at that price]
+    D --> E[Headlines<br/>Claude]
+    E --> F[Export<br/>static JSON]
+    F --> G[Next.js dashboard<br/>GitHub Pages]
+```
 
-- Adjustable probability threshold (5–25%)
-- Sortable table with AI-generated event summaries, implied probability, last price, volume, and trade depth at price
-- Aggregate stats: total black swans found, average implied probability, total volume, profit if you'd bought at the 7-day price
-- Category breakdown showing which domains produce the most surprises
+| Step | What happens |
+|------|--------------|
+| **Collect** | Pages through settled markets since the last run (first run: 180 days). Keeps markets with ≥1,000 contracts traded. Sports and multi-leg parlays are excluded using Kalshi's own series categories, fetched once per run from `/series`. |
+| **Score** | For each YES-resolved market open at least 7 days, fetches daily candlesticks and takes the **last candle that closed at or before 7 days pre-close**. Its closing trade price is the implied probability. If nothing traded that day, the closing bid/ask midpoint is used when the spread is ≤10¢; otherwise the market is marked `no_data`. |
+| **Depth** | For black swans, pulls that day's individual trades and sums contracts within ±2¢ of the prediction price: how much money actually stood behind the mispricing. |
+| **Headlines** | Claude (Haiku 4.5 by default) turns each market's title and rules into a factual, past-tense headline. Uses structured outputs and matches results by ticker. |
+| **Export** | Writes one JSON bundle per dashboard threshold (5–25%) plus run metadata, so the site is fully static. |
 
-## Architecture
+## Methodology decisions
+
+These are the judgment calls that shape the numbers, and why they were made:
+
+- **No lookahead.** The prediction candle must *end* at or before the 7-day mark. Taking the nearest candle can use a price from after the cutoff, which quietly makes the crowd look smarter than it was.
+- **Short-lived markets are excluded, not approximated.** Hourly and 15-minute markets make up the large majority of liquid YES resolutions on a typical day. They have no week-ahead price, and scoring them on their last trade (which is often stale in range markets) inflated earlier results. They're counted and reported, but not scored.
+- **Official categories over ticker heuristics.** Hand-maintained prefix lists drift as Kalshi launches new series; the `/series` endpoint is the source of truth.
+- **Quotes only when informative.** A 0¢ bid / 6¢ ask is a clear signal; a 15¢ / 90¢ book is not. The price source (`trade` or `quote`) is stored and shown.
+- **Upside is labelled as an upper bound.** `(1 − price) × depth` assumes every YES-side buyer near that price held to settlement.
+- **Transient failures retry; empty data doesn't.** Network errors leave a market pending for the next run. Markets with no usable price are marked so they aren't re-fetched forever.
+
+## Project structure
 
 ```
 backend/
-  main.py           FastAPI application (REST API)
-  collector.py      Data collection & enrichment pipeline
-  kalshi.py         Async Kalshi API client with pagination & rate limiting
-  database.py       SQLite schema, migrations, and query layer
-  models.py         Pydantic models for API responses
-
+  cli.py          Pipeline entry point (run, collect, score, depth, headlines, export, stats)
+  collector.py    Collect / score / depth logic and pure helpers
+  kalshi.py       Async Kalshi client: pagination, retries, archive handling
+  summaries.py    Claude headline generation (structured outputs)
+  database.py     SQLite schema and all shared queries
+  export.py       Static JSON export
+  main.py         Read-only FastAPI app for local development
+  config.py       Every tunable in one place
+  tests/          pytest suite with real Kalshi response fixtures
 frontend/
-  src/app/          Next.js App Router pages
-  src/components/   Dashboard components (table, stats cards, threshold slider)
-  src/lib/api.ts    API client with dual-mode support (live API / static JSON)
-
+  src/app/        Next.js App Router page
+  src/components/ Stats cards, table, threshold slider
+  src/lib/        API client (live API or static JSON), formatting, tests
 scripts/
-  export_data.py    Export DB to static JSON for GitHub Pages
-  update_and_deploy.sh   Orchestration: collect → export → build → deploy
+  update_and_deploy.sh   Pipeline → tests → static build → gh-pages
 ```
 
-## Setup
+## Running it
 
-### Backend
+Requirements: [uv](https://docs.astral.sh/uv/) (installs Python 3.12 for you) and Node 20.9+.
 
 ```bash
+# Backend
 cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
+uv sync
+cp .env.example .env          # add ANTHROPIC_API_KEY for headlines
+uv run python cli.py run      # full pipeline; first run takes a couple of hours
+uv run python cli.py stats    # quick look at the results
+uv run uvicorn main:app --reload --port 8000
 
-Create `backend/.env`:
-
-```
-GEMINI_API_KEY=your_key_here
-```
-
-Run the data pipeline:
-
-```bash
-python3 collector.py
-```
-
-Start the API server:
-
-```bash
-uvicorn main:app --reload --port 8000
-```
-
-### Frontend
-
-```bash
+# Frontend (separate terminal)
 cd frontend
 npm install
-npm run dev
+npm run dev                   # http://localhost:3000, reads the local API
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Individual steps can be re-run on their own, e.g. `uv run python cli.py headlines --force` to regenerate every headline after a prompt change. Later `collect` runs are incremental.
 
-## Data Pipeline
-
-The collector runs in two phases:
-
-- **Phase 1** — Fetch settled markets from Kalshi (incremental after first run). Filters out sports markets and enforces a minimum volume of 1,000 contracts.
-- **Phase 2** — For each qualifying YES-resolved market, fetch the daily candlestick from 7 days before close to get the implied probability at that point.
-
-Post-detection enrichment adds categories, prediction-day trading volume, trade depth at the prediction price (±$0.02), and AI-generated summaries.
-
-## Static Deployment
-
-To deploy as a static site (e.g. GitHub Pages):
+## Tests
 
 ```bash
-# Run the full pipeline
-./scripts/update_and_deploy.sh
+cd backend && uv run pytest        # 70+ tests: client, pipeline, SQL, Claude integration, API
+cd frontend && npm test            # sorting/filtering, static-mode fetching, formatting
 ```
 
-This collects fresh data, exports it to JSON, builds a static Next.js export, and pushes to the `gh-pages` branch.
+Backend tests run against a throwaway SQLite database and fake Kalshi/Claude clients, with fixtures captured from real API responses. No network is used. GitHub Actions runs lint, type checks, both test suites and a static build on every push.
 
-## Key Concepts
+## Deploying
 
-| Term | Definition |
-|------|-----------|
-| **Prediction price** | Candlestick close price 7 days before market close — the crowd's implied probability at that point |
-| **Black swan** | A market that resolved YES despite low prediction price (configurable threshold) |
-| **Depth at price** | Number of contracts that traded within ±$0.02 of the prediction price on that day |
-| **Profit at 7d price** | Hypothetical profit from buying YES at the prediction price: `(1 - prediction_price) × depth_at_price` |
+```bash
+./scripts/update_and_deploy.sh               # refresh data, test, build, push gh-pages
+SKIP_PIPELINE=1 ./scripts/update_and_deploy.sh   # redeploy existing data
+```
 
-## Tech Stack
+## Limitations and next steps
 
-- **Backend**: Python, FastAPI, httpx, aiosqlite, SQLite
-- **Frontend**: Next.js 16, React 19, Tailwind CSS
-- **AI**: Google Gemini (market summaries)
-- **Data**: Kalshi public API (unauthenticated)
+- **Selection, not calibration.** The dashboard shows YES outcomes that were priced low. It doesn't yet show how often *all* markets priced at 5% resolve YES, which would tell you whether 5% really means 5%. Scoring NO-resolved markets too would enable a proper calibration curve.
+- **One snapshot per market.** A single 7-day price can't show whether the crowd was consistently wrong or whether news broke the day after.
+- **Liquidity varies.** Depth @ price helps, but a thinly traded 3% print is weaker evidence than a heavily traded one.
+
+## Tech stack
+
+Python 3.12 · httpx · aiosqlite · FastAPI · Anthropic SDK (Claude Haiku 4.5) · pytest · Next.js 16 · React 19 · Tailwind CSS 4 · Vitest · GitHub Actions · GitHub Pages
+
+---
+
+Data from Kalshi's public API. Not affiliated with Kalshi. Not financial advice.

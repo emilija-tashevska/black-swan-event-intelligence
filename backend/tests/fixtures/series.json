@@ -1,0 +1,46 @@
+{
+ "series": [
+  {
+   "ticker": "KXCABOUT",
+   "title": "Next Cabinet memeber out",
+   "category": "Politics",
+   "frequency": "custom"
+  },
+  {
+   "ticker": "KXMVESPORTSMULTIGAMEEXTENDED",
+   "title": "MVE Sport Mutli Game",
+   "category": "Exotics",
+   "frequency": "one_off"
+  },
+  {
+   "ticker": "KXELITESERIENSPREAD",
+   "title": "Spread",
+   "category": "Sports",
+   "frequency": "custom"
+  },
+  {
+   "ticker": "KXBTC",
+   "title": "Bitcoin range",
+   "category": "Crypto",
+   "frequency": "hourly"
+  },
+  {
+   "ticker": "KXHIGHNY",
+   "title": "Highest temperature in NYC",
+   "category": "Climate and Weather",
+   "frequency": "daily"
+  },
+  {
+   "ticker": "KXGRAMSOTY",
+   "title": "Grammy for Song of the Year",
+   "category": "Entertainment",
+   "frequency": "annual"
+  },
+  {
+   "ticker": "KXBTCMINMON",
+   "title": "BTC one touch minimum",
+   "category": "Crypto",
+   "frequency": "monthly"
+  }
+ ]
+}

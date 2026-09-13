@@ -1,76 +1,44 @@
 "use client";
 
 import { Stats } from "@/lib/api";
-
-function formatPrice(price: number | null): string {
-  if (price === null) return "--";
-  return `${(price * 100).toFixed(1)}%`;
-}
-
-function formatVolume(vol: number): string {
-  if (vol >= 1_000_000) return `${(vol / 1_000_000).toFixed(1)}M`;
-  if (vol >= 1_000) return `${(vol / 1_000).toFixed(1)}K`;
-  return vol.toFixed(0);
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "--";
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-const CATEGORY_COLORS: Record<string, string> = {
-  Crypto: "bg-orange-500/15 text-orange-400",
-  Finance: "bg-blue-500/15 text-blue-400",
-  Weather: "bg-cyan-500/15 text-cyan-400",
-  Entertainment: "bg-purple-500/15 text-purple-400",
-  Politics: "bg-red-500/15 text-red-400",
-  Business: "bg-emerald-500/15 text-emerald-400",
-  Culture: "bg-pink-500/15 text-pink-400",
-  Other: "bg-gray-500/15 text-gray-400",
-};
+import { categoryClass } from "@/lib/categories";
+import { formatCompact, formatDate, formatMoney, formatPct } from "@/lib/format";
 
 interface StatsCardsProps {
   stats: Stats | null;
   loading: boolean;
+  category: string | null;
+  onCategory: (category: string | null) => void;
 }
 
-export default function StatsCards({ stats, loading }: StatsCardsProps) {
+export default function StatsCards({ stats, loading, category, onCategory }: StatsCardsProps) {
   const cards = [
     {
-      label: "Black Swans Found",
+      label: "Black swans",
       value: stats ? stats.total_black_swans.toLocaleString() : "--",
-      sub: stats ? `of ${stats.total_markets_analyzed.toLocaleString()} markets analyzed` : "",
+      sub: stats
+        ? `of ${stats.markets_scored.toLocaleString()} YES markets scored`
+        : "",
       accent: true,
     },
     {
-      label: "Avg 7-Day Price",
-      value: formatPrice(stats?.avg_prediction_price ?? null),
-      sub: "market price 7 days before close",
-      accent: false,
+      label: "Avg 7-day price",
+      value: formatPct(stats?.avg_prediction_price),
+      sub: stats ? `lowest ${formatPct(stats.lowest_prediction_price)}` : "",
     },
     {
-      label: "Profit at 7d Price",
-      value: stats ? (stats.total_profit_at_price >= 1_000_000 ? `$${(stats.total_profit_at_price / 1_000_000).toFixed(1)}M` : `$${formatVolume(stats.total_profit_at_price)}`) : "--",
-      sub: "profit for traders who bought at the 7d prediction price",
-      accent: false,
+      label: "YES-side upside",
+      value: stats ? formatMoney(stats.yes_side_upside) : "--",
+      sub: "upper bound for contracts traded near the 7-day price",
     },
     {
-      label: "Total Contracts Traded",
-      value: stats ? formatVolume(stats.total_volume) : "--",
-      sub: stats
-        ? `${formatDate(stats.earliest_settlement)} \u2013 ${formatDate(stats.latest_settlement)}`
-        : "",
-      accent: false,
+      label: "Contracts traded",
+      value: stats ? formatCompact(stats.total_volume) : "--",
+      sub: stats ? `${formatDate(stats.earliest_close)} – ${formatDate(stats.latest_close)}` : "",
     },
   ];
 
-  const categoryStats = stats?.category_stats ?? [];
-  const topCategories = categoryStats.slice(0, 6);
-  const totalBS = stats?.total_black_swans ?? 1;
+  const categories = stats?.category_stats ?? [];
 
   return (
     <div className="space-y-4">
@@ -78,42 +46,68 @@ export default function StatsCards({ stats, loading }: StatsCardsProps) {
         {cards.map((card) => (
           <div
             key={card.label}
-            className={`rounded-xl border p-5 transition-colors ${
-              card.accent
-                ? "border-accent/30 bg-accent/5"
-                : "border-border bg-card"
+            className={`rounded-xl border p-5 ${
+              card.accent ? "border-accent/30 bg-accent/5" : "border-border bg-card"
             } ${loading ? "animate-pulse" : ""}`}
           >
             <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
               {card.label}
             </p>
-            <p className={`text-3xl font-bold tabular-nums ${card.accent ? "text-accent" : "text-foreground"}`}>
+            <p
+              className={`text-3xl font-bold tabular-nums ${
+                card.accent ? "text-accent" : "text-foreground"
+              }`}
+            >
               {card.value}
             </p>
-            {card.sub && (
-              <p className="text-xs text-muted-foreground mt-1">{card.sub}</p>
-            )}
+            {card.sub && <p className="text-xs text-muted-foreground mt-1">{card.sub}</p>}
           </div>
         ))}
       </div>
 
-      {topCategories.length > 0 && (
+      {categories.length > 0 && (
         <div className="rounded-xl border border-border bg-card p-5">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-3">
-            Most Unpredictable Categories
-          </p>
-          <div className="flex flex-wrap gap-3">
-            {topCategories.map((cat) => {
-              const colorClass = CATEGORY_COLORS[cat.category] || CATEGORY_COLORS.Other;
-              const pct = ((cat.count / totalBS) * 100).toFixed(0);
+          <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              By category
+            </p>
+            <p className="text-xs text-muted-foreground">
+              share of each category&apos;s scored YES markets that were black swans · click to filter
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onCategory(null)}
+              aria-pressed={category === null}
+              className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                category === null
+                  ? "border-foreground/40 text-foreground"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              All
+            </button>
+            {categories.map((c) => {
+              const active = category === c.category;
               return (
-                <div key={cat.category} className="flex items-center gap-2">
-                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${colorClass}`}>
-                    {cat.category}
+                <button
+                  type="button"
+                  key={c.category}
+                  onClick={() => onCategory(active ? null : c.category)}
+                  aria-pressed={active}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs transition-colors ${
+                    active ? "border-foreground/40" : "border-transparent hover:border-border"
+                  }`}
+                >
+                  <span className={`rounded-full px-2 py-0.5 font-medium ${categoryClass(c.category)}`}>
+                    {c.category}
                   </span>
-                  <span className="text-sm font-semibold tabular-nums">{cat.count}</span>
-                  <span className="text-xs text-muted-foreground">({pct}%)</span>
-                </div>
+                  <span className="font-semibold tabular-nums">{c.count}</span>
+                  {c.rate != null && (
+                    <span className="text-muted-foreground tabular-nums">{formatPct(c.rate, 0)}</span>
+                  )}
+                </button>
               );
             })}
           </div>

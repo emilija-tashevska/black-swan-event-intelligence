@@ -1,0 +1,25 @@
+{
+    "event": {
+        "category": "Crypto",
+        "collateral_return_type": "MECNET",
+        "event_ticker": "KXBTC-26FEB2717",
+        "exchange_index": 0,
+        "last_updated_ts": "0001-01-01T00:00:00Z",
+        "mutually_exclusive": true,
+        "product_metadata": {
+            "cadence": "weekly"
+        },
+        "series_ticker": "KXBTC",
+        "settlement_sources": [
+            {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/data/indices/BRTI?ref=blog.cfbenchmarks.com"
+            }
+        ],
+        "strike_date": "2026-02-27T22:00:00Z",
+        "strike_period": "",
+        "sub_title": "On Feb 27, 2026 at 5pm EST",
+        "title": "Bitcoin price range on Feb 27, 2026 at 5pm EST?"
+    },
+    "markets": []
+}
