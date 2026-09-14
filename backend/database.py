@@ -44,11 +44,42 @@ CREATE INDEX IF NOT EXISTS idx_markets_scoring
     ON markets(result, prediction_status, prediction_price);
 CREATE INDEX IF NOT EXISTS idx_markets_category ON markets(category);
 
+-- Snapshot of currently open, low-priced markets; replaced on every watchlist run.
+CREATE TABLE IF NOT EXISTS open_markets (
+    ticker         TEXT PRIMARY KEY,
+    event_ticker   TEXT NOT NULL,
+    series_ticker  TEXT NOT NULL DEFAULT '',
+    category       TEXT NOT NULL DEFAULT '',
+    title          TEXT NOT NULL DEFAULT '',
+    yes_sub_title  TEXT NOT NULL DEFAULT '',
+    rules_primary  TEXT NOT NULL DEFAULT '',
+    close_time     TEXT,
+    price          REAL NOT NULL,
+    price_source   TEXT NOT NULL,
+    yes_bid        REAL,
+    yes_ask        REAL,
+    last_price     REAL,
+    volume         REAL NOT NULL DEFAULT 0
+);
+
+-- How an event's markets relate to each other; see structure.py.
+CREATE TABLE IF NOT EXISTS events (
+    event_ticker        TEXT PRIMARY KEY,
+    series_ticker       TEXT NOT NULL DEFAULT '',
+    title               TEXT NOT NULL DEFAULT '',
+    mutually_exclusive  INTEGER,
+    market_count        INTEGER NOT NULL,
+    strike_type         TEXT,
+    structure           TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS metadata (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 """
+
+RESOLVED = "result IN ('yes', 'no')"
 
 BLACK_SWAN_WHERE = (
     "result = 'yes' AND prediction_status = 'ok' AND prediction_price < :threshold"
@@ -113,6 +144,11 @@ async def set_meta(db: aiosqlite.Connection, key: str, value: str) -> None:
     await db.commit()
 
 
+async def delete_meta_prefix(db: aiosqlite.Connection, prefix: str) -> None:
+    await db.execute("DELETE FROM metadata WHERE key LIKE ? || '%'", (prefix,))
+    await db.commit()
+
+
 # ── Collection ──
 
 UPSERT_MARKET = """
@@ -143,10 +179,11 @@ async def upsert_markets(db: aiosqlite.Connection, rows: list[dict]) -> int:
 
 async def mark_short_lived(db: aiosqlite.Connection, min_duration_days: float) -> int:
     """Markets open for less than the lookback have no 7-day-prior price; they
-    are recorded as out of scope rather than scored on a stale last trade."""
+    are recorded as out of scope rather than scored on a stale last trade.
+    Both outcomes are scored: NO markets are what make calibration possible."""
     cur = await db.execute(
-        """UPDATE markets SET prediction_status = 'short_lived'
-           WHERE result = 'yes' AND prediction_status IS NULL
+        f"""UPDATE markets SET prediction_status = 'short_lived'
+           WHERE {RESOLVED} AND prediction_status IS NULL
              AND julianday(close_time) - julianday(open_time) < ?""",
         (min_duration_days,),
     )
@@ -156,9 +193,9 @@ async def mark_short_lived(db: aiosqlite.Connection, min_duration_days: float) -
 
 async def markets_needing_prediction(db: aiosqlite.Connection) -> list[aiosqlite.Row]:
     cur = await db.execute(
-        """SELECT ticker, series_ticker, open_time, close_time, settlement_ts FROM markets
-           WHERE result = 'yes' AND prediction_status IS NULL
-           ORDER BY close_time"""
+        f"""SELECT ticker, series_ticker, result, open_time, close_time, settlement_ts
+            FROM markets WHERE {RESOLVED} AND prediction_status IS NULL
+            ORDER BY close_time"""
     )
     return list(await cur.fetchall())
 
@@ -237,8 +274,10 @@ async def query_black_swans(
     direction = "ASC" if order.lower() == "asc" else "DESC"
     where = BLACK_SWAN_WHERE + (" AND category = :category" if category else "")
     cur = await db.execute(
-        f"""SELECT {BLACK_SWAN_COLUMNS} FROM markets WHERE {where}
-            ORDER BY {col} IS NULL, {col} {direction}, ticker
+        f"""SELECT m.*, COALESCE(e.structure, 'unknown') AS structure
+            FROM (SELECT {BLACK_SWAN_COLUMNS} FROM markets WHERE {where}) m
+            LEFT JOIN events e USING (event_ticker)
+            ORDER BY m.{col} IS NULL, m.{col} {direction}, m.ticker
             LIMIT :limit OFFSET :offset""",
         {"threshold": threshold, "category": category, "limit": limit, "offset": offset},
     )
@@ -266,7 +305,8 @@ async def query_stats(
         """SELECT COUNT(*) AS markets_collected,
                   SUM(result = 'yes') AS yes_markets,
                   SUM(result = 'yes' AND prediction_status = 'ok') AS markets_scored,
-                  SUM(prediction_status = 'short_lived') AS short_lived_excluded
+                  SUM(result = 'yes' AND prediction_status = 'short_lived')
+                      AS short_lived_excluded
            FROM markets"""
     )).fetchone()
 
@@ -303,3 +343,73 @@ async def query_stats(
             for c in cats
         ],
     }
+
+
+# ── Calibration and watchlist ──
+
+async def scored_outcomes(db: aiosqlite.Connection) -> list[aiosqlite.Row]:
+    """Every scored, resolved market: the raw material for calibration."""
+    cur = await db.execute(
+        f"""SELECT m.category, COALESCE(e.structure, 'unknown') AS structure, m.event_ticker,
+                   m.prediction_price, m.result = 'yes' AS resolved_yes
+            FROM markets m LEFT JOIN events e USING (event_ticker)
+            WHERE m.{RESOLVED} AND m.prediction_status = 'ok'"""
+    )
+    return list(await cur.fetchall())
+
+
+async def events_missing_structure(db: aiosqlite.Connection) -> list[aiosqlite.Row]:
+    """Events of scored markets or open watchlist markets not yet classified,
+    with how many of their markets we hold locally (a lower bound)."""
+    cur = await db.execute(
+        """SELECT event_ticker, MAX(series_ticker) AS series_ticker, COUNT(*) AS local_count
+           FROM (
+               SELECT event_ticker, series_ticker FROM markets WHERE prediction_status = 'ok'
+               UNION ALL
+               SELECT event_ticker, series_ticker FROM open_markets
+           )
+           WHERE event_ticker NOT IN (SELECT event_ticker FROM events)
+           GROUP BY event_ticker ORDER BY event_ticker"""
+    )
+    return list(await cur.fetchall())
+
+
+async def upsert_events(db: aiosqlite.Connection, rows: list[dict]) -> None:
+    await db.executemany(
+        """INSERT INTO events (event_ticker, series_ticker, title, mutually_exclusive,
+                               market_count, strike_type, structure)
+           VALUES (:event_ticker, :series_ticker, :title, :mutually_exclusive,
+                   :market_count, :strike_type, :structure)
+           ON CONFLICT(event_ticker) DO UPDATE SET
+               title = excluded.title, mutually_exclusive = excluded.mutually_exclusive,
+               market_count = excluded.market_count, strike_type = excluded.strike_type,
+               structure = excluded.structure""",
+        rows,
+    )
+    await db.commit()
+
+
+UPSERT_OPEN_MARKET = """
+INSERT INTO open_markets (
+    ticker, event_ticker, series_ticker, category, title, yes_sub_title, rules_primary,
+    close_time, price, price_source, yes_bid, yes_ask, last_price, volume
+) VALUES (
+    :ticker, :event_ticker, :series_ticker, :category, :title, :yes_sub_title, :rules_primary,
+    :close_time, :price, :price_source, :yes_bid, :yes_ask, :last_price, :volume
+)
+"""
+
+
+async def replace_open_markets(db: aiosqlite.Connection, rows: list[dict]) -> None:
+    await db.execute("DELETE FROM open_markets")
+    await db.executemany(UPSERT_OPEN_MARKET, rows)
+    await db.commit()
+
+
+async def query_open_markets(db: aiosqlite.Connection) -> list[dict]:
+    cur = await db.execute(
+        """SELECT o.*, COALESCE(e.structure, 'unknown') AS structure
+           FROM open_markets o LEFT JOIN events e USING (event_ticker)
+           ORDER BY o.close_time, o.ticker"""
+    )
+    return [dict(r) for r in await cur.fetchall()]

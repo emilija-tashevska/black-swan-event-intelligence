@@ -123,3 +123,30 @@ async def test_force_regenerates_existing(db):
     assert await summaries.generate_summaries(db, fake_client(parsed(("KX-0", "new"))),
                                               force=True) == 1
     assert (await summaries_in(db))["KX-0"][0] == "new"
+
+
+async def test_repeated_failures_stop_the_run_instead_of_failing_every_batch(db):
+    await seed(db, 10)
+    bad_request = api_error(anthropic.BadRequestError, 400)
+    client = fake_client(bad_request, bad_request, bad_request, parsed())
+    with pytest.raises(summaries.HeadlineGenerationError, match="3 headline batches"):
+        await summaries.generate_summaries(db, client, batch_size=2)
+    assert len(client.messages.requests) == 3
+
+
+async def test_a_success_resets_the_failure_count(db):
+    await seed(db, 10)
+    err = api_error(anthropic.InternalServerError, 500)
+    client = fake_client(err, err, parsed(("KX-4", "e")), err, err)
+    assert await summaries.generate_summaries(db, client, batch_size=2) == 1
+    assert len(client.messages.requests) == 5
+
+
+def test_claude_client_sends_workspace_header_only_when_configured(monkeypatch):
+    import cli
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    assert "anthropic-workspace-id" not in cli.claude_client().default_headers
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", " wrkspc_123 ")
+    assert cli.claude_client().default_headers["anthropic-workspace-id"] == "wrkspc_123"

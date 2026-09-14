@@ -15,8 +15,9 @@ DB_PATH = Path(os.environ.get("BLACK_SWAN_DB", BACKEND_DIR / "black_swan.db"))
 
 # How far before close the "prediction price" is sampled.
 LOOKBACK_DAYS = 7
-# Markets must have been open at least this long to have a meaningful lookback.
-MIN_MARKET_DURATION_DAYS = LOOKBACK_DAYS
+# Markets must have traded for at least a full day before the lookback point;
+# a market open exactly 7 days has no candle that closed before it.
+MIN_MARKET_DURATION_DAYS = LOOKBACK_DAYS + 1
 # Ignore thin markets: lifetime contracts traded.
 MIN_VOLUME = 1000.0
 # First run fetches markets settled within this window; later runs are incremental.

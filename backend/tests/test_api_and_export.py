@@ -36,6 +36,11 @@ def test_api_endpoints(seeded_path, monkeypatch):
         stats = client.get("/api/stats").json()
         assert stats["total_black_swans"] == 1 and stats["threshold"] == 0.10
 
+        cal = client.get("/api/calibration").json()
+        assert cal["overall"]["n"] == 2
+        wl = client.get("/api/watchlist").json()
+        assert wl["markets"] == [] and wl["horizon_days"] == [4, 10]
+
         assert client.get("/api/black-swans", params={"threshold": 0}).status_code == 422
         assert client.post("/api/black-swans").status_code == 405
 
@@ -50,6 +55,10 @@ async def test_export_writes_every_threshold_and_meta(seeded_path, tmp_path):
         bs = json.loads((out / f"black-swans-{pct}.json").read_text())
         stats = json.loads((out / f"stats-{pct}.json").read_text())
         assert bs["count"] == len(bs["black_swans"]) == stats["total_black_swans"]
+    calibration = json.loads((out / "calibration.json").read_text())
+    assert calibration["overall"]["n"] == 2
+    assert json.loads((out / "watchlist.json").read_text())["markets"] == []
     meta = json.loads((out / "meta.json").read_text())
     assert meta["data_as_of"].startswith("2026-09-13")
+    assert meta["first_close"] and meta["first_close"] <= meta["last_close"]
     assert meta["thresholds"] == list(config.STATIC_THRESHOLDS)

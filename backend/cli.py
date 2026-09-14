@@ -1,6 +1,7 @@
 """Command-line entry point for the pipeline.
 
-    uv run python cli.py run            # collect → score → depth → headlines → export
+    uv run python cli.py run            # collect → score → structure → depth → headlines
+                                        #   → watchlist → export
     uv run python cli.py collect        # individual steps
     uv run python cli.py headlines --force
     uv run python cli.py stats --threshold 0.05
@@ -22,11 +23,21 @@ import config
 import database as dbq
 from export import export_static
 from kalshi import KalshiClient
+from structure import enrich_structures
 from summaries import generate_summaries
+from watchlist import collect_open_markets
 
 logger = logging.getLogger("cli")
 
-STEPS = ("collect", "score", "depth", "headlines", "export")
+STEPS = ("collect", "score", "structure", "depth", "headlines", "watchlist", "export")
+
+
+def claude_client() -> anthropic.AsyncAnthropic:
+    """Keys that aren't scoped to a workspace must name one on every request."""
+    headers = {}
+    if workspace := os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip():
+        headers["anthropic-workspace-id"] = workspace
+    return anthropic.AsyncAnthropic(default_headers=headers)
 
 
 async def run_steps(steps: list[str], force_headlines: bool = False) -> None:
@@ -36,15 +47,21 @@ async def run_steps(steps: list[str], force_headlines: bool = False) -> None:
             logger.info("Collect: %s", await collector.collect_markets(kalshi, db, resolver))
         if "score" in steps:
             logger.info("Score: %s", await collector.score_predictions(kalshi, db))
+        if "structure" in steps:
+            logger.info("Structure: %s", await enrich_structures(kalshi, db))
         if "depth" in steps:
             logger.info("Depth: %d markets", await collector.enrich_depth(kalshi, db))
         if "headlines" in steps:
             if os.environ.get("ANTHROPIC_API_KEY"):
-                async with anthropic.AsyncAnthropic() as claude:
+                async with claude_client() as claude:
                     n = await generate_summaries(db, claude, force=force_headlines)
                 logger.info("Headlines: %d written", n)
             else:
                 logger.warning("ANTHROPIC_API_KEY not set (backend/.env); skipping headlines")
+        if "watchlist" in steps:
+            resolver = await collector.CategoryResolver.load(kalshi)
+            logger.info("Watchlist: %d markets", await collect_open_markets(kalshi, db, resolver))
+            logger.info("Watchlist structures: %s", await enrich_structures(kalshi, db))
         if "export" in steps:
             logger.info("Export: %s", await export_static(db))
 

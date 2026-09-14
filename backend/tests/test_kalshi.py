@@ -22,7 +22,8 @@ async def test_paginate_follows_cursor_until_exhausted(respx_mock):
     async with client() as k:
         pages = [p async for p in k.settled_markets(min_settled_ts=123)]
 
-    assert [m["ticker"] for p in pages for m in p] == ["A", "B", "C"]
+    assert [m["ticker"] for p, _ in pages for m in p] == ["A", "B", "C"]
+    assert [c for _, c in pages] == ["c1", "c2", None]
     assert route.call_count == 3
     first, second = route.calls[0].request.url.params, route.calls[1].request.url.params
     assert first["status"] == "settled" and first["min_settled_ts"] == "123"
@@ -48,7 +49,7 @@ async def test_empty_page_with_cursor_stops(respx_mock):
         return_value=httpx.Response(200, json={"markets": [], "cursor": "loop"})
     )
     async with client() as k:
-        assert [p async for p in k.historical_markets(0)] == []
+        assert [p async for p in k.historical_markets(0)] == [([], None)]
 
 
 @respx.mock(base_url=BASE_URL)
@@ -136,6 +137,47 @@ async def test_historical_markets_filters_client_side_and_stops_past_the_window(
     async with client() as k:
         pages = [p async for p in k.historical_markets(window_start)]
 
-    assert [[m["ticker"] for m in p] for p in pages] == [["NEW"], ["EDGE"]]
+    assert [([m["ticker"] for m in p], c) for p, c in pages] == [
+        (["NEW"], "c1"), (["EDGE"], "c2"), ([], None)]
     assert route.call_count == 3
     assert "min_settled_ts" not in route.calls[0].request.url.params
+
+
+@respx.mock(base_url=BASE_URL)
+async def test_open_markets_filters_by_close_window(respx_mock):
+    route = respx_mock.get("/markets").mock(
+        return_value=httpx.Response(200, json={"markets": [{"ticker": "O"}], "cursor": ""}))
+    async with client() as k:
+        pages = [p async for p in k.open_markets(100, 200)]
+    assert pages == [[{"ticker": "O"}]]
+    params = route.calls[0].request.url.params
+    assert params["status"] == "open" and params["mve_filter"] == "exclude"
+    assert (params["min_close_ts"], params["max_close_ts"]) == ("100", "200")
+
+
+@respx.mock(base_url=BASE_URL)
+async def test_settled_markets_resumes_from_cursor(respx_mock):
+    route = respx_mock.get("/markets").mock(
+        return_value=httpx.Response(200, json={"markets": [{"ticker": "Z"}], "cursor": ""}))
+    async with client() as k:
+        pages = [p async for p in k.settled_markets(1, cursor="saved")]
+    assert pages == [([{"ticker": "Z"}], None)]
+    assert route.calls[0].request.url.params["cursor"] == "saved"
+
+
+@respx.mock(base_url=BASE_URL)
+async def test_backoff_is_exponential_capped_and_honours_retry_after(respx_mock, monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("kalshi.asyncio.sleep", fake_sleep)
+    respx_mock.get("/historical/cutoff").mock(side_effect=[
+        httpx.Response(503), httpx.Response(503), httpx.Response(429, headers={"Retry-After": "7"}),
+        httpx.Response(503), httpx.Response(503), httpx.Response(503), httpx.Response(503),
+        httpx.Response(200, json={"market_settled_ts": "x"}),
+    ])
+    async with KalshiClient(rate_limit_delay=0, retry_backoff=2.0) as k:
+        assert await k.get_cutoff_ts() == "x"
+    assert sleeps == [2.0, 4.0, 7.0, 16.0, 32.0, 60.0, 60.0]

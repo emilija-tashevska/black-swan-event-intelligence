@@ -2,6 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { BlackSwan, SortField, SortOrder } from "@/lib/api";
+import { STRUCTURE_HELP, STRUCTURE_LABEL } from "@/lib/calibration";
 import { categoryClass } from "@/lib/categories";
 import {
   formatCompact,
@@ -24,7 +25,7 @@ interface BlackSwanTableProps {
 const COLUMNS: { label: string; help?: string; sort?: SortField }[] = [
   { label: "#" },
   { label: "Event" },
-  { label: "Category" },
+  { label: "Category / type" },
   { label: "7d price", help: "Last closing price at least 7 days before close: the crowd's implied probability", sort: "prediction_price" },
   { label: "Volume", help: "Contracts traded over the market's lifetime", sort: "volume" },
   { label: "7d volume", help: "Contracts traded during the day the 7d price was taken" },
@@ -138,6 +139,9 @@ export default function BlackSwanTable({ events, loading, error, sort, order, on
                           {ev.category}
                         </span>
                       )}
+                      <span className="mt-1 block text-xs text-muted-foreground whitespace-nowrap" title={STRUCTURE_HELP[ev.structure]}>
+                        {STRUCTURE_LABEL[ev.structure]}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <span
