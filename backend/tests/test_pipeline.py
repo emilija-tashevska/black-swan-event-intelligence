@@ -54,14 +54,46 @@ class TestCollect:
         later = NOW + timedelta(days=2)
         kalshi2 = FakeKalshi(series=SERIES)
         await collect(db, kalshi2, now=later)
-        assert kalshi2.calls[0] == ("live", int(NOW.timestamp()))
+        assert kalshi2.calls[0] == ("live", int(NOW.timestamp()), None)
         assert await dbq.get_meta(db, "last_collection_ts") == str(int(later.timestamp()))
+
+    async def test_interrupted_collection_resumes_from_saved_cursor(self, db):
+        pages = [[make_market(f"KXBTC-26SEP01-P{i}")] for i in range(4)]
+        crashing = FakeKalshi(series=SERIES, live=pages, fail_at=("live", 2))
+        with pytest.raises(RuntimeError, match="page 2"):
+            await collect(db, crashing, now=NOW)
+        assert await all_tickers(db) == ["KXBTC-26SEP01-P0", "KXBTC-26SEP01-P1"]
+        assert await dbq.get_meta(db, "last_collection_ts") is None  # not marked complete
+
+        # Resumed later: same window, continues at page 2, no rescanning
+        resumed = FakeKalshi(series=SERIES, live=pages)
+        result = await collect(db, resumed, now=NOW + timedelta(hours=3))
+        window = int((NOW - timedelta(days=180)).timestamp())
+        assert resumed.calls[0] == ("live", window, "live2")
+        assert result.scanned == 2
+        assert len(await all_tickers(db)) == 4
+        # The next incremental run starts from when the *interrupted* run began
+        assert await dbq.get_meta(db, "last_collection_ts") == str(int(NOW.timestamp()))
+        assert await dbq.get_meta(db, "collect:live:cursor") is None
+
+    async def test_resume_skips_sources_already_finished(self, db):
+        crashing = FakeKalshi(series=SERIES, live=[[make_market("KXBTC-26SEP01-L")]],
+                              historical=[[make_market("KXBTC-26JUL01-H0")],
+                                          [make_market("KXBTC-26JUL01-H1")]],
+                              fail_at=("historical", 1))
+        with pytest.raises(RuntimeError):
+            await collect(db, crashing, now=NOW)
+        resumed = FakeKalshi(series=SERIES, historical=crashing.historical_pages)
+        await collect(db, resumed, now=NOW)
+        assert [c[0] for c in resumed.calls] == ["historical"]
+        assert resumed.calls[0][2] == "historical1"
+        assert len(await all_tickers(db)) == 3
 
     async def test_skips_archive_when_window_starts_after_cutoff(self, db):
         kalshi = FakeKalshi(series=SERIES, cutoff_ts="2026-07-15T00:00:00Z",
                             historical=[[make_market("KXBTC-26JUL01-OLD")]])
         await collect(db, kalshi, now=NOW)  # first run: window reaches before the cutoff
-        assert ("historical", int((NOW - timedelta(days=180)).timestamp())) in kalshi.calls
+        assert ("historical", int((NOW - timedelta(days=180)).timestamp()), None) in kalshi.calls
 
         kalshi2 = FakeKalshi(series=SERIES, cutoff_ts="2026-07-15T00:00:00Z",
                              historical=[[make_market("KXBTC-26JUL01-OLD2")]])
@@ -149,17 +181,20 @@ class TestScore:
             make_market("KXBTC-26SEP01-HOURLY", close_ts=CLOSE, duration_days=0.04,
                         last_price_dollars="0.0100"),
             make_market("KXBTC-26SEP01-6D", close_ts=CLOSE, duration_days=6.9),
+            # Open exactly 7 days: the lookback point is the open, so no candle precedes it
             make_market("KXBTC-26SEP01-7D", close_ts=CLOSE, duration_days=7),
+            make_market("KXBTC-26SEP01-8D", close_ts=CLOSE, duration_days=8),
         )
-        kalshi = FakeKalshi(candles={"KXBTC-26SEP01-7D": [candle(LOOKBACK, "0.05")]})
+        kalshi = FakeKalshi(candles={"KXBTC-26SEP01-8D": [candle(LOOKBACK, "0.05")]})
         counts = await collector.score_predictions(kalshi, db)
 
         status = await status_of(db)
         assert status["KXBTC-26SEP01-HOURLY"][0] == "short_lived"
         assert status["KXBTC-26SEP01-HOURLY"][1] is None
         assert status["KXBTC-26SEP01-6D"][0] == "short_lived"
-        assert status["KXBTC-26SEP01-7D"][:2] == ("ok", 0.05)
-        assert counts["short_lived"] == 2
+        assert status["KXBTC-26SEP01-7D"][0] == "short_lived"
+        assert status["KXBTC-26SEP01-8D"][:2] == ("ok", 0.05)
+        assert counts["short_lived"] == 3
         assert not [c for c in kalshi.calls if c[0] == "candles" and "HOURLY" in c[1]]
 
     async def test_no_candles_is_final_but_transient_errors_are_retried(self, db):

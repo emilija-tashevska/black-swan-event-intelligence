@@ -83,7 +83,7 @@ class FakeKalshi:
     """In-memory stand-in for KalshiClient with the same public methods."""
 
     def __init__(self, *, live=(), historical=(), series=(), events=None, candles=None,
-                 trades=None, cutoff_ts: str | None = None, failing_tickers=()):
+                 trades=None, cutoff_ts: str | None = None, failing_tickers=(), fail_at=None):
         self.live_pages = [list(p) for p in live]
         self.historical_pages = [list(p) for p in historical]
         self.series = list(series)
@@ -92,6 +92,7 @@ class FakeKalshi:
         self.trades = trades or {}
         self.cutoff_ts = cutoff_ts
         self.failing = set(failing_tickers)
+        self.fail_at = fail_at  # (source label, page index) that raises, to simulate a crash
         self.calls: list[tuple] = []
 
     async def get_cutoff_ts(self):
@@ -106,17 +107,20 @@ class FakeKalshi:
             raise RuntimeError("404")
         return self.events[event_ticker]
 
-    async def _pages(self, pages):
-        for p in pages:
-            yield p
+    async def _pages(self, label, pages, cursor):
+        start = int(cursor.removeprefix(label)) if cursor else 0
+        for i in range(start, len(pages)):
+            if self.fail_at == (label, i):
+                raise RuntimeError(f"{label} page {i} unavailable")
+            yield pages[i], f"{label}{i + 1}" if i + 1 < len(pages) else None
 
-    def settled_markets(self, min_settled_ts):
-        self.calls.append(("live", min_settled_ts))
-        return self._pages(self.live_pages)
+    def settled_markets(self, min_settled_ts, cursor=None):
+        self.calls.append(("live", min_settled_ts, cursor))
+        return self._pages("live", self.live_pages, cursor)
 
-    def historical_markets(self, min_settled_ts):
-        self.calls.append(("historical", min_settled_ts))
-        return self._pages(self.historical_pages)
+    def historical_markets(self, min_settled_ts, cursor=None):
+        self.calls.append(("historical", min_settled_ts, cursor))
+        return self._pages("historical", self.historical_pages, cursor)
 
     async def get_candlesticks(self, ticker, start_ts, end_ts, *, historical, series_ticker=None):
         self.calls.append(("candles", ticker, start_ts, end_ts, historical))

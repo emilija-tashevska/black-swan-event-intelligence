@@ -29,6 +29,14 @@ logger = logging.getLogger("cli")
 STEPS = ("collect", "score", "depth", "headlines", "export")
 
 
+def claude_client() -> anthropic.AsyncAnthropic:
+    """Keys that aren't scoped to a workspace must name one on every request."""
+    headers = {}
+    if workspace := os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip():
+        headers["anthropic-workspace-id"] = workspace
+    return anthropic.AsyncAnthropic(default_headers=headers)
+
+
 async def run_steps(steps: list[str], force_headlines: bool = False) -> None:
     async with dbq.connect() as db, KalshiClient() as kalshi:
         if "collect" in steps:
@@ -40,7 +48,7 @@ async def run_steps(steps: list[str], force_headlines: bool = False) -> None:
             logger.info("Depth: %d markets", await collector.enrich_depth(kalshi, db))
         if "headlines" in steps:
             if os.environ.get("ANTHROPIC_API_KEY"):
-                async with anthropic.AsyncAnthropic() as claude:
+                async with claude_client() as claude:
                     n = await generate_summaries(db, claude, force=force_headlines)
                 logger.info("Headlines: %d written", n)
             else:

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -127,6 +127,9 @@ class CollectionResult:
     skipped_category: dict[str, int] = field(default_factory=dict)
 
 
+RESUME_PREFIX = "collect:"
+
+
 async def collect_markets(
     client: KalshiClient,
     db: aiosqlite.Connection,
@@ -134,27 +137,46 @@ async def collect_markets(
     now: datetime | None = None,
 ) -> CollectionResult:
     """Fetch settled markets (live + archive) since the last run, keeping liquid,
-    in-scope markets. The first run looks back COLLECTION_WINDOW_DAYS."""
-    now = now or datetime.now(UTC)
-    last = await dbq.get_meta(db, "last_collection_ts")
-    if last:
-        min_settled_ts = int(last)
-        logger.info("Incremental collection since %s", datetime.fromtimestamp(min_settled_ts, UTC))
+    in-scope markets. The first run looks back COLLECTION_WINDOW_DAYS.
+
+    Progress (window and page cursors) is checkpointed after every page, so an
+    interrupted collection resumes where it stopped instead of rescanning."""
+    started = await dbq.get_meta(db, RESUME_PREFIX + "started_ts")
+    if started:
+        started_ts = int(started)
+        min_settled_ts = int(await dbq.get_meta(db, RESUME_PREFIX + "min_settled_ts"))
+        logger.info("Resuming interrupted collection (window since %s)",
+                    datetime.fromtimestamp(min_settled_ts, UTC))
     else:
-        min_settled_ts = int((now - timedelta(days=config.COLLECTION_WINDOW_DAYS)).timestamp())
-        logger.info("First collection: last %d days", config.COLLECTION_WINDOW_DAYS)
+        now = now or datetime.now(UTC)
+        started_ts = int(now.timestamp())
+        last = await dbq.get_meta(db, "last_collection_ts")
+        if last:
+            min_settled_ts = int(last)
+            logger.info("Incremental collection since %s",
+                        datetime.fromtimestamp(min_settled_ts, UTC))
+        else:
+            min_settled_ts = int((now - timedelta(days=config.COLLECTION_WINDOW_DAYS)).timestamp())
+            logger.info("First collection: last %d days", config.COLLECTION_WINDOW_DAYS)
+        await dbq.set_meta(db, RESUME_PREFIX + "started_ts", str(started_ts))
+        await dbq.set_meta(db, RESUME_PREFIX + "min_settled_ts", str(min_settled_ts))
 
     result = CollectionResult()
-    sources: list[tuple[str, AsyncIterator[list[dict]]]] = [
-        ("live", client.settled_markets(min_settled_ts)),
+    sources: list[tuple[str, Callable[[int, str | None], AsyncIterator]]] = [
+        ("live", client.settled_markets),
     ]
     cutoff_ts = parse_ts(await client.get_cutoff_ts())
     if cutoff_ts is None or min_settled_ts < cutoff_ts:
-        sources.append(("historical", client.historical_markets(min_settled_ts)))
+        sources.append(("historical", client.historical_markets))
     else:
         logger.info("Window starts after the archive cutoff; skipping /historical")
-    for label, pages in sources:
-        async for page in pages:
+
+    for label, source in sources:
+        if await dbq.get_meta(db, f"{RESUME_PREFIX}{label}:done"):
+            logger.info("%s: already collected in this run", label)
+            continue
+        cursor = await dbq.get_meta(db, f"{RESUME_PREFIX}{label}:cursor")
+        async for page, next_cursor in source(min_settled_ts, cursor):
             rows = []
             for m in page:
                 result.scanned += 1
@@ -168,12 +190,17 @@ async def collect_markets(
                 rows.append(market_to_row(m, series_ticker, category))
             if rows:
                 result.stored += await dbq.upsert_markets(db, rows)
+            if next_cursor:
+                await dbq.set_meta(db, f"{RESUME_PREFIX}{label}:cursor", next_cursor)
             logger.info(
                 "%s: scanned %d, stored %d, thin %d, excluded %s",
                 label, result.scanned, result.stored, result.skipped_thin, result.skipped_category,
             )
+        await dbq.set_meta(db, f"{RESUME_PREFIX}{label}:done", "1")
 
-    await dbq.set_meta(db, "last_collection_ts", str(int(now.timestamp())))
+    # Next run starts from when this one started, so nothing settling mid-run is missed.
+    await dbq.set_meta(db, "last_collection_ts", str(started_ts))
+    await dbq.delete_meta_prefix(db, RESUME_PREFIX)
     return result
 
 
@@ -219,7 +246,8 @@ async def score_market(
 
 async def score_predictions(client: KalshiClient, db: aiosqlite.Connection) -> dict:
     short = await dbq.mark_short_lived(db, config.MIN_MARKET_DURATION_DAYS)
-    logger.info("Excluded %d short-lived YES markets (< %d days)", short, config.LOOKBACK_DAYS)
+    logger.info("Excluded %d short-lived YES markets (< %d days)", short,
+                config.MIN_MARKET_DURATION_DAYS)
 
     cutoff_ts = parse_ts(await client.get_cutoff_ts())
     markets = await dbq.markets_needing_prediction(db)

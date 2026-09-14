@@ -113,6 +113,11 @@ async def set_meta(db: aiosqlite.Connection, key: str, value: str) -> None:
     await db.commit()
 
 
+async def delete_meta_prefix(db: aiosqlite.Connection, prefix: str) -> None:
+    await db.execute("DELETE FROM metadata WHERE key LIKE ? || '%'", (prefix,))
+    await db.commit()
+
+
 # ── Collection ──
 
 UPSERT_MARKET = """

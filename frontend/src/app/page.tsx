@@ -129,7 +129,8 @@ export default function Home() {
               when the spread is 10¢ or less (marked <sup>q</sup>).
             </li>
             <li>
-              Markets open for less than 7 days have no week-ahead price and are left out
+              Markets open for less than 8 days have no full day of trading before the 7-day mark and
+              are left out
               {stats ? ` (${stats.short_lived_excluded.toLocaleString()} excluded)` : ""}.
             </li>
             <li>
