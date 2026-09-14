@@ -20,6 +20,7 @@ export interface BlackSwan {
   open_interest: number;
   prediction_price: number;
   prediction_source: "trade" | "quote" | null;
+  structure: Structure;
   prediction_ts: number | null;
   prediction_volume: number | null;
   volume_at_price: number | null;
@@ -52,9 +53,92 @@ export interface Stats {
 export interface Meta {
   exported_at: string;
   data_as_of: string | null;
+  first_close: string | null;
+  last_close: string | null;
   lookback_days: number;
   min_volume: number;
   summary_model: string;
+}
+
+export type Structure = "standalone" | "pick_one" | "ladder" | "bundle" | "unknown";
+
+export interface CalibrationBucket {
+  lo: number;
+  hi: number;
+  n: number;
+  events: number;
+  yes: number;
+  mean_price: number;
+  rate: number;
+  ci_low: number;
+  ci_high: number;
+  n_effective: number;
+}
+
+export interface GroupStats {
+  n: number;
+  events: number;
+  yes: number;
+  mean_price: number | null;
+  rate: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+  n_effective: number | null;
+}
+
+export interface CalibrationCurve {
+  n: number;
+  events: number;
+  brier: number | null;
+  longshots: GroupStats;
+  buckets: CalibrationBucket[];
+}
+
+export type CalibrationGroup = CalibrationCurve & { category: string | null; structure: Structure | null };
+
+export interface Calibration {
+  bucket_edges: number[];
+  longshot_max_price: number;
+  min_group_markets: number;
+  overall: CalibrationCurve;
+  categories: CalibrationGroup[];
+  structures: CalibrationGroup[];
+  segments: CalibrationGroup[];
+}
+
+export type Assessment =
+  | "happens_more_often"
+  | "in_line"
+  | "happens_less_often"
+  | "insufficient_history";
+
+export interface WatchlistMarket {
+  ticker: string;
+  event_ticker: string;
+  series_ticker: string;
+  category: string;
+  title: string;
+  yes_sub_title: string;
+  rules_primary: string;
+  close_time: string | null;
+  price: number;
+  price_source: "quote" | "last_trade";
+  yes_bid: number | null;
+  yes_ask: number | null;
+  last_price: number | null;
+  volume: number;
+  structure: Structure;
+  base_rate: (CalibrationBucket & { scope: string }) | null;
+  assessment: Assessment;
+}
+
+export interface Watchlist {
+  fetched_at: string | null;
+  horizon_days: [number, number];
+  max_price: number;
+  min_group_markets: number;
+  min_group_events: number;
+  markets: WatchlistMarket[];
 }
 
 export type SortField =
@@ -133,4 +217,12 @@ export async function fetchMeta(): Promise<Meta | null> {
   } catch {
     return null;
   }
+}
+
+export async function fetchCalibration(): Promise<Calibration> {
+  return getJson<Calibration>(IS_STATIC ? `${BASE_PATH}/data/calibration.json` : `${API_BASE}/api/calibration`);
+}
+
+export async function fetchWatchlist(): Promise<Watchlist> {
+  return getJson<Watchlist>(IS_STATIC ? `${BASE_PATH}/data/watchlist.json` : `${API_BASE}/api/watchlist`);
 }

@@ -144,6 +144,18 @@ async def test_historical_markets_filters_client_side_and_stops_past_the_window(
 
 
 @respx.mock(base_url=BASE_URL)
+async def test_open_markets_filters_by_close_window(respx_mock):
+    route = respx_mock.get("/markets").mock(
+        return_value=httpx.Response(200, json={"markets": [{"ticker": "O"}], "cursor": ""}))
+    async with client() as k:
+        pages = [p async for p in k.open_markets(100, 200)]
+    assert pages == [[{"ticker": "O"}]]
+    params = route.calls[0].request.url.params
+    assert params["status"] == "open" and params["mve_filter"] == "exclude"
+    assert (params["min_close_ts"], params["max_close_ts"]) == ("100", "200")
+
+
+@respx.mock(base_url=BASE_URL)
 async def test_settled_markets_resumes_from_cursor(respx_mock):
     route = respx_mock.get("/markets").mock(
         return_value=httpx.Response(200, json={"markets": [{"ticker": "Z"}], "cursor": ""}))

@@ -126,7 +126,7 @@ async def status_of(db):
 
 
 class TestScore:
-    async def test_scores_long_lived_yes_markets_from_the_seven_day_candle(self, db):
+    async def test_scores_long_lived_resolved_markets_from_the_seven_day_candle(self, db):
         await seed_for_scoring(
             db,
             make_market("KXBTC-26SEP01-SWAN", close_ts=CLOSE),
@@ -137,14 +137,18 @@ class TestScore:
             "KXBTC-26SEP01-SWAN": [candle(LOOKBACK - DAY, "0.0300", volume="250.00"),
                                    candle(LOOKBACK + DAY, "0.9900")],
             "KXBTC-26SEP01-FAV": [candle(LOOKBACK, "0.8000")],
+            "KXBTC-26SEP01-NO": [candle(LOOKBACK, "0.0200")],
         })
         counts = await collector.score_predictions(kalshi, db)
 
         status = await status_of(db)
         assert status["KXBTC-26SEP01-SWAN"] == ("ok", 0.03, LOOKBACK - DAY, 250.0)
         assert status["KXBTC-26SEP01-FAV"][:2] == ("ok", 0.8)
-        assert status["KXBTC-26SEP01-NO"] == (None, None, None, None)  # NO markets aren't scored
-        assert counts["ok"] == 2 and counts["black_swans"] == 1
+        # NO markets are scored (for calibration) but a cheap NO is not a black swan
+        assert status["KXBTC-26SEP01-NO"][:2] == ("ok", 0.02)
+        assert counts["ok"] == 3 and counts["black_swans"] == 1
+        assert [r["ticker"] for r in await dbq.query_black_swans(db, 0.10)] == [
+            "KXBTC-26SEP01-SWAN"]
 
         candle_call = next(c for c in kalshi.calls if c[1] == "KXBTC-26SEP01-SWAN")
         assert candle_call[3] == LOOKBACK  # request window never extends past the lookback

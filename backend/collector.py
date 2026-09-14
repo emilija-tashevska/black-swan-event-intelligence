@@ -246,13 +246,14 @@ async def score_market(
 
 async def score_predictions(client: KalshiClient, db: aiosqlite.Connection) -> dict:
     short = await dbq.mark_short_lived(db, config.MIN_MARKET_DURATION_DAYS)
-    logger.info("Excluded %d short-lived YES markets (< %d days)", short,
+    logger.info("Excluded %d short-lived markets (< %d days)", short,
                 config.MIN_MARKET_DURATION_DAYS)
 
     cutoff_ts = parse_ts(await client.get_cutoff_ts())
     markets = await dbq.markets_needing_prediction(db)
-    logger.info("Scoring %d YES markets", len(markets))
+    logger.info("Scoring %d resolved markets", len(markets))
 
+    results = {m["ticker"]: m["result"] for m in markets}
     sem = asyncio.Semaphore(SCORING_CONCURRENCY)
 
     async def bounded(m):
@@ -275,7 +276,8 @@ async def score_predictions(client: KalshiClient, db: aiosqlite.Connection) -> d
             counts[scored.status] += 1
             if scored.source == "quote":
                 counts["from_quotes"] += 1
-            if scored.price is not None and scored.price < config.DEFAULT_THRESHOLD:
+            if (scored.price is not None and scored.price < config.DEFAULT_THRESHOLD
+                    and results[ticker] == "yes"):
                 counts["black_swans"] += 1
         await db.commit()
         logger.info("Scored %d / %d %s", start + len(batch), len(markets), counts)

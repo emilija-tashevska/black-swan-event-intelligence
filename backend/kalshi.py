@@ -158,6 +158,13 @@ class KalshiClient:
             cursor=cursor,
         )
 
+    def open_markets(self, min_close_ts: int, max_close_ts: int) -> AsyncIterator[list[dict]]:
+        return self.paginate(
+            "/markets", "markets",
+            {"status": "open", "mve_filter": "exclude",
+             "min_close_ts": min_close_ts, "max_close_ts": max_close_ts},
+        )
+
     async def historical_markets(
         self, min_settled_ts: int, cursor: str | None = None,
     ) -> AsyncIterator[tuple[list[dict], str | None]]:
@@ -176,6 +183,10 @@ class KalshiClient:
             yield in_window, None if finished else next_cursor
             if finished:
                 return
+
+    async def markets_for_event(self, event_ticker: str, *, historical: bool) -> list[dict]:
+        path = "/historical/markets" if historical else "/markets"
+        return await self._collect(path, "markets", {"event_ticker": event_ticker})
 
     # ── Candlesticks ──
 

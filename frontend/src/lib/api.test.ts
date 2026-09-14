@@ -18,6 +18,7 @@ function swan(ticker: string, overrides: Partial<BlackSwan> = {}): BlackSwan {
     open_interest: 0,
     prediction_price: 0.05,
     prediction_source: "trade",
+    structure: "standalone",
     prediction_ts: null,
     prediction_volume: null,
     volume_at_price: null,

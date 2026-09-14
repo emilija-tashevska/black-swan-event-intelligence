@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import config
 import database as dbq
+from watchlist import build_calibration, build_watchlist
 
 app = FastAPI(title="Black Swan Event Intelligence")
 app.add_middleware(
@@ -47,6 +48,16 @@ async def list_black_swans(
 @app.get("/api/stats")
 async def stats(db: Db, threshold: Threshold = config.DEFAULT_THRESHOLD):
     return await dbq.query_stats(db, threshold)
+
+
+@app.get("/api/calibration")
+async def calibration(db: Db):
+    return await build_calibration(db)
+
+
+@app.get("/api/watchlist")
+async def watchlist(db: Db):
+    return await build_watchlist(db)
 
 
 @app.get("/api/health")

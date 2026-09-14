@@ -83,7 +83,8 @@ class FakeKalshi:
     """In-memory stand-in for KalshiClient with the same public methods."""
 
     def __init__(self, *, live=(), historical=(), series=(), events=None, candles=None,
-                 trades=None, cutoff_ts: str | None = None, failing_tickers=(), fail_at=None):
+                 trades=None, cutoff_ts: str | None = None, failing_tickers=(), fail_at=None,
+                 open_pages=()):
         self.live_pages = [list(p) for p in live]
         self.historical_pages = [list(p) for p in historical]
         self.series = list(series)
@@ -92,6 +93,7 @@ class FakeKalshi:
         self.trades = trades or {}
         self.cutoff_ts = cutoff_ts
         self.failing = set(failing_tickers)
+        self.open_pages = [list(p) for p in open_pages]
         self.fail_at = fail_at  # (source label, page index) that raises, to simulate a crash
         self.calls: list[tuple] = []
 
@@ -121,6 +123,14 @@ class FakeKalshi:
     def historical_markets(self, min_settled_ts, cursor=None):
         self.calls.append(("historical", min_settled_ts, cursor))
         return self._pages("historical", self.historical_pages, cursor)
+
+    def open_markets(self, min_close_ts, max_close_ts):
+        self.calls.append(("open", min_close_ts, max_close_ts))
+        return self._plain_pages(self.open_pages)
+
+    async def _plain_pages(self, pages):
+        for p in pages:
+            yield p
 
     async def get_candlesticks(self, ticker, start_ts, end_ts, *, historical, series_ticker=None):
         self.calls.append(("candles", ticker, start_ts, end_ts, historical))
