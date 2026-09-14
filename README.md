@@ -9,6 +9,43 @@
 **Live dashboard:** https://emilija-tashevska.github.io/black-swan-event-intelligence/
 
 <!-- RESULTS:START -->
+![Overview: the short answer and the biggest surprises](docs/screenshots/overview-hero.png)
+
+## Findings (markets closing Mar 25 – Sep 13, 2026)
+
+Based on **17,703 scored markets from 3,123 events**: every liquid, non-sports Kalshi market open at least 8 days, YES and NO. These are the numbers from this snapshot; the dashboard recomputes its wording from whatever data it's given.
+
+**1. Unlikely events do happen, and some were big.** 151 markets resolved YES after trading below 10% a week before close. The most heavily traded: Graham Platner dropping out of the Maine Senate race (priced 2.9%, 5.5M contracts), BTC's trimmed mean topping $80,000 in August (2.0%), and Darline Graham winning South Carolina's Republican Senate runoff by 3–6 points (9.0%).
+
+**2. But longshots came true less often than priced.** Markets priced under 10% averaged **2.8%** and happened **2.2%** of the time (95% range 1.8–2.7%), so cheap YES contracts paid out about 0.8× as often as their price implied. The cheapest group was the most overpriced: 0–2% markets averaged 0.9% and happened 0.5% of the time.
+
+![Calibration gap by price bucket](docs/screenshots/calibration-gap.png)
+
+**3. YES looks slightly rich across the board, not only at the tails.** 13 of 16 price groups sit below the zero line, including favourites (70–85% and 98–100%). That's different from the classic longshot bias, where favourites are *under*priced. Part of it may be mechanical: the 7-day price is a traded price, and if most trades lift the ask, YES prices sit a little above the midpoint.
+
+**4. It depends on how the market is built.**
+
+| Market type | Longshots (<10%) | Priced | Happened | 95% range | Verdict |
+|---|---|---|---|---|---|
+| Pick one of many (nominees, candidates, ranges) | 2,787 from 744 events | 2.1% | 1.5% | 1.1–2.1% | Happened less often |
+| Threshold ladder (CPI above X, BTC above $Y) | 2,522 from 754 events | 3.2% | 2.9% | 2.1–4.0% | In line |
+| Bundle (words said in a speech, etc.) | 1,375 from 379 events | 3.3% | 2.5% | 1.7–3.7% | In line |
+| Standalone yes/no | 48 from 48 events | 4.7% | 4.2% | 1.1–14.1% | Too few to tell |
+
+The overall longshot effect is driven by **pick-one events**, especially election candidates and parties (priced 1.8%, happened 1.0%, 1,451 markets from 411 events): traders overpay for also-rans. **Crypto ladders go the other way** (priced 2.9%, happened 7.1%), though daily ladders on the same coin move together, so treat that as a lead rather than a finding.
+
+![Longshots by market type](docs/screenshots/market-types.png)
+
+**5. The watchlist applies this to markets open now.** Of 124 liquid markets closing within 4–10 days and priced under 25%, 99 look in line with history, 12 sit in groups that happened more often than priced (mostly crypto price ladders) and 13 in groups that happened less often (mostly pick-one election and approval-rating markets).
+
+<details>
+<summary>More screenshots</summary>
+
+![Calibration tab](docs/screenshots/calibration-tab.png)
+![Black swans tab](docs/screenshots/black-swans-tab.png)
+![Watchlist tab](docs/screenshots/watchlist-tab.png)
+
+</details>
 <!-- RESULTS:END -->
 
 ## How it works
@@ -87,9 +124,9 @@ backend/
   config.py       Every tunable in one place
   tests/          pytest suite with real Kalshi response fixtures
 frontend/
-  src/app/        Next.js App Router page
-  src/components/ Black swan table, calibration chart, watchlist, stats
-  src/lib/        API client (live API or static JSON), formatting, tests
+  src/app/        Next.js App Router page with linkable tabs
+  src/components/ Overview story, charts, black swan table, calibration, watchlist, methodology
+  src/lib/        API client (live API or static JSON), data-derived findings, formatting, tests
 scripts/
   update_and_deploy.sh   Pipeline → tests → static build → gh-pages
 ```
@@ -103,7 +140,7 @@ Requirements: [uv](https://docs.astral.sh/uv/) (installs Python 3.12 for you) an
 cd backend
 uv sync
 cp .env.example .env          # add ANTHROPIC_API_KEY for headlines
-uv run python cli.py run      # full pipeline; first run takes a couple of hours
+uv run python cli.py run      # full pipeline; the first 6-month run takes several hours and resumes if interrupted
 uv run python cli.py stats    # quick look at the results
 uv run uvicorn main:app --reload --port 8000
 
@@ -118,8 +155,8 @@ Individual steps can be re-run on their own, e.g. `uv run python cli.py headline
 ## Tests
 
 ```bash
-cd backend && uv run pytest        # ~100 tests: client, pipeline, SQL, calibration, watchlist, Claude, API
-cd frontend && npm test            # sorting/filtering, static-mode fetching, calibration verdicts, formatting
+cd backend && uv run pytest        # 123 tests: client, pipeline, SQL, calibration, structures, watchlist, Claude, API
+cd frontend && npm test            # 31 tests: findings, calibration verdicts, sorting/filtering, static fetching, formatting
 ```
 
 Backend tests run against a throwaway SQLite database and fake Kalshi/Claude clients, with fixtures captured from real API responses. No network is used. GitHub Actions runs lint, type checks, both test suites and a static build on every push.
@@ -135,6 +172,7 @@ SKIP_PIPELINE=1 ./scripts/update_and_deploy.sh   # redeploy existing data
 
 - **Events in the same series can be related too.** Intervals account for markets sharing an event, but not for correlation across events (e.g. consecutive weekly CPI ladders reacting to the same news).
 - **Calibration drifts.** Base rates from the last six months may not hold as Kalshi's user base and market mix change; the watchlist inherits that.
+- **Traded prices, not midpoints.** If takers mostly buy YES, traded prices sit above the true midpoint and YES looks rich. Re-scoring on bid/ask midpoints would show how much of finding 3 survives.
 - **One snapshot per market.** A single 7-day price can't show whether the crowd was consistently wrong or whether news broke the day after.
 - **Liquidity varies.** Depth @ price helps, but a thinly traded 3% print is weaker evidence than a heavily traded one.
 
