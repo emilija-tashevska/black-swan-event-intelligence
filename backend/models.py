@@ -1,130 +1,95 @@
 from __future__ import annotations
 
-from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
-class Market(BaseModel):
-    ticker: str
-    event_ticker: str
-    market_type: str
-    title: str
-    subtitle: str
-    yes_sub_title: str
-    no_sub_title: str
-    open_time: datetime
-    close_time: datetime
-    created_time: datetime
-    status: str
-    result: str
-
-    last_price_dollars: str
-    yes_bid_dollars: str
-    yes_ask_dollars: str
-    no_bid_dollars: str
-    no_ask_dollars: str
-    volume_fp: str
-    open_interest_fp: str
-    notional_value_dollars: str
-
-    settlement_ts: datetime | None = None
-    settlement_value_dollars: str | None = None
-    rules_primary: str = ""
-
-    prediction_price: float | None = None
-    prediction_ts: int | None = None
-    is_black_swan: bool = False
-
-    class Config:
-        extra = "ignore"
-
-
-def _to_dollar_str(v: str | int | float | None) -> str | None:
-    """Normalize cent ints or dollar strings into dollar strings."""
-    if v is None:
+def to_dollars(value: str | int | float | None) -> float | None:
+    """Kalshi now returns prices as dollar strings ("0.0700"). Older payloads
+    used integer cents; accept both."""
+    if value is None or value == "":
         return None
-    if isinstance(v, (int, float)):
-        return f"{v / 100:.4f}"
-    return str(v)
+    if isinstance(value, str):
+        return float(value)
+    return value / 100
+
+
+def to_count(value: str | int | float | None) -> float:
+    if value is None or value == "":
+        return 0.0
+    return float(value)
 
 
 class CandlestickPrice(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     open: str | int | float | None = None
     high: str | int | float | None = None
     low: str | int | float | None = None
     close: str | int | float | None = None
     mean: str | int | float | None = None
     previous: str | int | float | None = None
-    open_dollars: str | None = None
-    high_dollars: str | None = None
-    low_dollars: str | None = None
     close_dollars: str | None = None
     mean_dollars: str | None = None
     previous_dollars: str | None = None
 
-    class Config:
-        extra = "ignore"
-
-    def get_close(self) -> str | None:
-        return self.close_dollars or _to_dollar_str(self.close)
-
-    def get_mean(self) -> str | None:
-        return self.mean_dollars or _to_dollar_str(self.mean)
-
-    def get_previous(self) -> str | None:
-        return self.previous_dollars or _to_dollar_str(self.previous)
+    def implied_probability(self) -> float | None:
+        """Closing trade price for the period, falling back to its mean trade
+        price. `previous` (the last trade before the period) is deliberately
+        ignored: on quiet days it can be weeks old and far from the live book."""
+        for v in (self.close_dollars or self.close, self.mean_dollars or self.mean):
+            price = to_dollars(v)
+            if price is not None:
+                return price
+        return None
 
 
-class CandlestickBidAsk(BaseModel):
-    open: str | int | float | None = None
-    high: str | int | float | None = None
-    low: str | int | float | None = None
+class CandlestickQuote(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     close: str | int | float | None = None
-    open_dollars: str | None = None
-    high_dollars: str | None = None
-    low_dollars: str | None = None
     close_dollars: str | None = None
 
-    class Config:
-        extra = "ignore"
+    def closing(self) -> float | None:
+        return to_dollars(self.close_dollars or self.close)
 
 
 class Candlestick(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     end_period_ts: int
     price: CandlestickPrice
-    yes_bid: CandlestickBidAsk
-    yes_ask: CandlestickBidAsk
+    yes_bid: CandlestickQuote | None = None
+    yes_ask: CandlestickQuote | None = None
     volume: str | int | float | None = None
     volume_fp: str | None = None
-    open_interest: str | int | float | None = None
-    open_interest_fp: str | None = None
 
-    class Config:
-        extra = "ignore"
+    def contracts_traded(self) -> float:
+        return to_count(self.volume_fp or self.volume)
+
+    def closing_quote(self) -> tuple[float | None, float | None]:
+        """Closing YES bid and ask for the period, if the book had them."""
+        return (
+            self.yes_bid.closing() if self.yes_bid else None,
+            self.yes_ask.closing() if self.yes_ask else None,
+        )
+
+    def implied_probability(self, max_spread: float) -> tuple[float, str] | None:
+        """(probability, source). Prefers a price traded during the period; when
+        nothing traded, uses the closing YES bid/ask midpoint if the book was
+        tight enough to be informative. Otherwise there is no current price."""
+        traded = self.price.implied_probability()
+        if traded is not None:
+            return traded, "trade"
+        bid, ask = self.closing_quote()
+        if bid is not None and ask is not None and 0 <= ask - bid <= max_spread + 1e-9:
+            return (bid + ask) / 2, "quote"
+        return None
 
 
-class BlackSwanEvent(BaseModel):
+class Headline(BaseModel):
     ticker: str
-    event_ticker: str
-    title: str
-    yes_sub_title: str
-    prediction_price: float
-    prediction_ts: int | None
-    last_price_dollars: str
-    volume_fp: str
-    close_time: datetime
-    settlement_ts: datetime | None
-    result: str
-    yes_bid_dollars: str
-    yes_ask_dollars: str
-    rules_primary: str
+    headline: str
 
 
-class BlackSwanStats(BaseModel):
-    total_black_swans: int
-    total_markets_analyzed: int
-    avg_prediction_price: float | None
-    lowest_prediction_price: float | None
-    total_volume: float
-    earliest_settlement: datetime | None
-    latest_settlement: datetime | None
+class HeadlineBatch(BaseModel):
+    headlines: list[Headline]

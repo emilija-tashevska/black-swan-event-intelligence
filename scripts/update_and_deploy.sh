@@ -1,84 +1,50 @@
 #!/usr/bin/env bash
+# Refresh data and publish the static dashboard to GitHub Pages.
+#
+#   ./scripts/update_and_deploy.sh            # pipeline + build + deploy
+#   SKIP_PIPELINE=1 ./scripts/update_and_deploy.sh   # rebuild/deploy existing data
+#   SKIP_DEPLOY=1 ./scripts/update_and_deploy.sh     # everything except the push
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
+REPO_NAME="$(basename -s .git "$(git -C "$ROOT_DIR" remote get-url origin)")"
 
-# GitHub Pages repo name — used as basePath so assets resolve correctly.
-# Change this if your repo has a different name.
-REPO_NAME="black-swan-event-intelligence"
+command -v uv >/dev/null || { echo "uv is required: https://docs.astral.sh/uv/"; exit 1; }
 
-echo "=== Black Swan Analytics — Update & Deploy ==="
-echo ""
-
-# ── Step 1: Activate venv and run data collection ────────────────────────
-echo "▸ Step 1: Collecting new market data..."
+echo "▸ Pipeline"
 cd "$BACKEND_DIR"
-source venv/bin/activate 2>/dev/null || {
-  echo "  Creating virtual environment..."
-  python3 -m venv venv
-  source venv/bin/activate
-  pip install -q -r requirements.txt
-}
-
-# Run incremental collection + enrichment
-python3 -c "
-import asyncio, os, sys
-sys.path.insert(0, '.')
-from collector import run_full_collection, run_black_swan_enrichment
-
-async def main():
-    result = await run_full_collection()
-    print(f'  Collection: {result}')
-    api_key = os.environ.get('GEMINI_API_KEY', '')
-    enrichment = await run_black_swan_enrichment(api_key or None)
-    print(f'  Enrichment: {enrichment}')
-
-asyncio.run(main())
-"
-echo "  ✓ Data collection complete"
-echo ""
-
-# ── Step 2: Export data to static JSON ───────────────────────────────────
-echo "▸ Step 2: Exporting data to static JSON..."
-python3 "$SCRIPT_DIR/export_data.py"
-echo "  ✓ Export complete"
-echo ""
-
-# ── Step 3: Build static frontend ───────────────────────────────────────
-echo "▸ Step 3: Building static frontend..."
-cd "$FRONTEND_DIR"
-NEXT_PUBLIC_STATIC=true NEXT_PUBLIC_BASE_PATH="/$REPO_NAME" npm run build
-echo "  ✓ Build complete"
-echo ""
-
-# ── Step 4: Deploy to GitHub Pages ──────────────────────────────────────
-echo "▸ Step 4: Deploying to GitHub Pages..."
-cd "$ROOT_DIR"
-
-DEPLOY_DIR=$(mktemp -d)
-cp -r "$FRONTEND_DIR/out/." "$DEPLOY_DIR/"
-touch "$DEPLOY_DIR/.nojekyll"
-
-cd "$DEPLOY_DIR"
-git init -q
-git checkout -q -b gh-pages
-git add -A
-git commit -q -m "Deploy $(date -u '+%Y-%m-%d %H:%M') UTC"
-
-REMOTE_URL=$(cd "$ROOT_DIR" && git remote get-url origin 2>/dev/null || echo "")
-if [ -z "$REMOTE_URL" ]; then
-  echo "  ⚠ No git remote found. Skipping push."
-  echo "  Set up with: git remote add origin <your-repo-url>"
-  echo "  Then run: cd $DEPLOY_DIR && git push --force origin gh-pages"
+uv sync --frozen
+if [[ -z "${SKIP_PIPELINE:-}" ]]; then
+  uv run python cli.py run        # collect → score → depth → headlines → export
 else
-  git remote add origin "$REMOTE_URL"
-  git push --force origin gh-pages
-  echo "  ✓ Deployed to GitHub Pages"
+  uv run python cli.py export
 fi
 
-rm -rf "$DEPLOY_DIR"
-echo ""
-echo "=== Done! ==="
+echo "▸ Tests"
+uv run pytest -q
+(cd "$FRONTEND_DIR" && npm ci && npm test)
+
+echo "▸ Static build (basePath=/$REPO_NAME)"
+cd "$FRONTEND_DIR"
+rm -rf out
+NEXT_PUBLIC_STATIC=true NEXT_PUBLIC_BASE_PATH="/$REPO_NAME" npm run build
+test -s out/data/stats-10.json || { echo "Export missing from build output"; exit 1; }
+
+if [[ -n "${SKIP_DEPLOY:-}" ]]; then
+  echo "SKIP_DEPLOY set; build is in frontend/out"
+  exit 0
+fi
+
+echo "▸ Deploy to gh-pages"
+DEPLOY_DIR="$(mktemp -d)"
+trap 'rm -rf "$DEPLOY_DIR"' EXIT
+cp -R out/. "$DEPLOY_DIR/"
+touch "$DEPLOY_DIR/.nojekyll"
+cd "$DEPLOY_DIR"
+git init -q -b gh-pages
+git add -A
+git commit -q -m "Deploy $(date -u '+%Y-%m-%d %H:%M') UTC"
+git push --force "$(git -C "$ROOT_DIR" remote get-url origin)" gh-pages
+echo "✓ Deployed"

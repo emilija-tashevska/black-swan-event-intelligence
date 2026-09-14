@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Black Swan Analytics",
-  description: "When were prediction markets wrong? Discover black swan events from Kalshi.",
+  title: "Black Swan Event Intelligence",
+  description:
+    "When were prediction markets wrong? Kalshi markets that resolved YES despite a low implied probability a week before close.",
 };
 
 export default function RootLayout({

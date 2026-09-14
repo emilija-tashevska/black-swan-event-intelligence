@@ -1,131 +1,240 @@
-const IS_STATIC = process.env.NEXT_PUBLIC_STATIC === "true";
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || (IS_STATIC ? "" : "http://localhost:8000");
+export const IS_STATIC = process.env.NEXT_PUBLIC_STATIC === "true";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH || "";
+
+export const STATIC_THRESHOLDS = [0.05, 0.1, 0.15, 0.2, 0.25];
 
 export interface BlackSwan {
   ticker: string;
   event_ticker: string;
+  series_ticker: string;
+  category: string;
   title: string;
   yes_sub_title: string;
+  rules_primary: string;
+  open_time: string | null;
+  close_time: string | null;
+  settlement_ts: string | null;
+  last_price: number;
+  volume: number;
+  open_interest: number;
   prediction_price: number;
+  prediction_source: "trade" | "quote" | null;
+  structure: Structure;
   prediction_ts: number | null;
   prediction_volume: number | null;
   volume_at_price: number | null;
-  last_price_dollars: string;
-  volume_fp: string;
-  open_interest_fp: string;
-  close_time: string;
-  settlement_ts: string | null;
-  result: string;
-  yes_bid_dollars: string;
-  yes_ask_dollars: string;
-  rules_primary: string;
-  category: string;
   ai_summary: string;
-}
-
-export interface BlackSwanResponse {
-  black_swans: BlackSwan[];
-  count: number;
-  limit?: number;
-  offset?: number;
 }
 
 export interface CategoryStat {
   category: string;
   count: number;
+  scored: number;
+  rate: number | null;
 }
 
 export interface Stats {
+  threshold: number;
   total_black_swans: number;
-  total_markets_analyzed: number;
   avg_prediction_price: number | null;
   lowest_prediction_price: number | null;
   total_volume: number;
-  total_profit_at_price: number;
-  earliest_settlement: string | null;
-  latest_settlement: string | null;
+  yes_side_upside: number;
+  earliest_close: string | null;
+  latest_close: string | null;
+  markets_collected: number;
+  yes_markets: number;
+  markets_scored: number;
+  short_lived_excluded: number;
   category_stats: CategoryStat[];
 }
 
-export interface CollectResponse {
-  status: string;
-  total_markets_fetched?: number;
-  yes_markets_enriched?: number;
+export interface Meta {
+  exported_at: string;
+  data_as_of: string | null;
+  first_close: string | null;
+  last_close: string | null;
+  lookback_days: number;
+  min_volume: number;
+  summary_model: string;
 }
 
-function thresholdPct(threshold: number): number {
-  return Math.round(threshold * 100);
+export type Structure = "standalone" | "pick_one" | "ladder" | "bundle" | "unknown";
+
+export interface CalibrationBucket {
+  lo: number;
+  hi: number;
+  n: number;
+  events: number;
+  yes: number;
+  mean_price: number;
+  rate: number;
+  ci_low: number;
+  ci_high: number;
+  n_effective: number;
 }
 
-const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+export interface GroupStats {
+  n: number;
+  events: number;
+  yes: number;
+  mean_price: number | null;
+  rate: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+  n_effective: number | null;
+}
 
-export async function fetchBlackSwans(
-  threshold = 0.10,
-  sort = "prediction_price",
-  order = "asc",
-  limit = 500,
-  offset = 0,
-): Promise<BlackSwanResponse> {
-  if (IS_STATIC) {
-    const pct = thresholdPct(threshold);
-    const res = await fetch(`${basePath}/data/black-swans-${pct}.json`);
-    if (!res.ok) {
-      const fallback = await fetch(`${basePath}/data/black-swans-10.json`);
-      return fallback.json();
-    }
-    const data: BlackSwanResponse = await res.json();
-    const items = [...data.black_swans];
-    const sortKey = sort as keyof BlackSwan;
-    items.sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey];
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      const na = typeof av === "string" ? parseFloat(av) || 0 : Number(av);
-      const nb = typeof bv === "string" ? parseFloat(bv) || 0 : Number(bv);
-      if (!isNaN(na) && !isNaN(nb)) return order === "asc" ? na - nb : nb - na;
-      return order === "asc"
-        ? String(av).localeCompare(String(bv))
-        : String(bv).localeCompare(String(av));
-    });
-    return { black_swans: items.slice(offset, offset + limit), count: items.length };
-  }
+export interface CalibrationCurve {
+  n: number;
+  events: number;
+  brier: number | null;
+  longshots: GroupStats;
+  buckets: CalibrationBucket[];
+}
 
-  const params = new URLSearchParams({
-    threshold: threshold.toString(),
-    sort,
-    order,
-    limit: limit.toString(),
-    offset: offset.toString(),
+export type CalibrationGroup = CalibrationCurve & { category: string | null; structure: Structure | null };
+
+export interface MidpointCheck {
+  max_spread: number;
+  markets: number;
+  with_quotes: number;
+  tight_quotes: number;
+  mean_premium: number | null;
+  premium_by_bucket: { lo: number; hi: number; n: number; mean_premium: number }[];
+  by_trade: CalibrationCurve;
+  by_mid: CalibrationCurve;
+}
+
+export interface Calibration {
+  midpoint_check?: MidpointCheck;
+  bucket_edges: number[];
+  longshot_max_price: number;
+  min_group_markets: number;
+  overall: CalibrationCurve;
+  categories: CalibrationGroup[];
+  structures: CalibrationGroup[];
+  segments: CalibrationGroup[];
+}
+
+export type Assessment =
+  | "happens_more_often"
+  | "in_line"
+  | "happens_less_often"
+  | "insufficient_history";
+
+export interface WatchlistMarket {
+  ticker: string;
+  event_ticker: string;
+  series_ticker: string;
+  category: string;
+  title: string;
+  yes_sub_title: string;
+  rules_primary: string;
+  close_time: string | null;
+  price: number;
+  price_source: "quote" | "last_trade";
+  yes_bid: number | null;
+  yes_ask: number | null;
+  last_price: number | null;
+  volume: number;
+  structure: Structure;
+  base_rate: (CalibrationBucket & { scope: string }) | null;
+  assessment: Assessment;
+}
+
+export interface Watchlist {
+  fetched_at: string | null;
+  horizon_days: [number, number];
+  max_price: number;
+  min_group_markets: number;
+  min_group_events: number;
+  markets: WatchlistMarket[];
+}
+
+export type SortField =
+  | "prediction_price"
+  | "volume"
+  | "close_time"
+  | "open_interest"
+  | "volume_at_price";
+export type SortOrder = "asc" | "desc";
+
+export interface Query {
+  threshold: number;
+  sort: SortField;
+  order: SortOrder;
+  category: string | null;
+}
+
+export function nearestThreshold(value: number, steps: number[] = STATIC_THRESHOLDS): number {
+  return steps.reduce((best, s) => (Math.abs(s - value) < Math.abs(best - value) ? s : best));
+}
+
+/** Sort and filter client-side, mirroring the API's ordering: nulls always last. */
+export function applyQuery(items: BlackSwan[], q: Pick<Query, "sort" | "order" | "category">) {
+  const filtered = q.category ? items.filter((i) => i.category === q.category) : [...items];
+  const dir = q.order === "asc" ? 1 : -1;
+  return filtered.sort((a, b) => {
+    const av = a[q.sort];
+    const bv = b[q.sort];
+    if (av == null && bv == null) return a.ticker.localeCompare(b.ticker);
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    const cmp = typeof av === "number" && typeof bv === "number"
+      ? av - bv
+      : String(av).localeCompare(String(bv));
+    return cmp !== 0 ? cmp * dir : a.ticker.localeCompare(b.ticker);
   });
-  const res = await fetch(`${API_BASE}/api/black-swans?${params}`);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Request failed (${res.status}): ${url}`);
   return res.json();
 }
 
-export async function fetchStats(threshold = 0.10): Promise<Stats> {
+export async function fetchBlackSwans(q: Query): Promise<BlackSwan[]> {
   if (IS_STATIC) {
-    const pct = thresholdPct(threshold);
-    const res = await fetch(`${basePath}/data/stats-${pct}.json`);
-    if (!res.ok) {
-      const fallback = await fetch(`${basePath}/data/stats-10.json`);
-      return fallback.json();
-    }
-    return res.json();
+    const pct = Math.round(nearestThreshold(q.threshold) * 100);
+    const data = await getJson<{ black_swans: BlackSwan[] }>(
+      `${BASE_PATH}/data/black-swans-${pct}.json`,
+    );
+    return applyQuery(data.black_swans, q);
   }
-
-  const params = new URLSearchParams({ threshold: threshold.toString() });
-  const res = await fetch(`${API_BASE}/api/stats?${params}`);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  const params = new URLSearchParams({
+    threshold: String(q.threshold),
+    sort: q.sort,
+    order: q.order,
+    limit: "1000",
+  });
+  if (q.category) params.set("category", q.category);
+  const data = await getJson<{ black_swans: BlackSwan[] }>(`${API_BASE}/api/black-swans?${params}`);
+  return data.black_swans;
 }
 
-export async function triggerCollection(threshold = 0.10): Promise<CollectResponse> {
+export async function fetchStats(threshold: number): Promise<Stats> {
   if (IS_STATIC) {
-    return { status: "static_mode" };
+    const pct = Math.round(nearestThreshold(threshold) * 100);
+    return getJson<Stats>(`${BASE_PATH}/data/stats-${pct}.json`);
   }
-  const params = new URLSearchParams({ threshold: threshold.toString() });
-  const res = await fetch(`${API_BASE}/api/collect?${params}`, { method: "POST" });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  return getJson<Stats>(`${API_BASE}/api/stats?threshold=${threshold}`);
+}
+
+export async function fetchMeta(): Promise<Meta | null> {
+  if (!IS_STATIC) return null;
+  try {
+    return await getJson<Meta>(`${BASE_PATH}/data/meta.json`);
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchCalibration(): Promise<Calibration> {
+  return getJson<Calibration>(IS_STATIC ? `${BASE_PATH}/data/calibration.json` : `${API_BASE}/api/calibration`);
+}
+
+export async function fetchWatchlist(): Promise<Watchlist> {
+  return getJson<Watchlist>(IS_STATIC ? `${BASE_PATH}/data/watchlist.json` : `${API_BASE}/api/watchlist`);
 }
