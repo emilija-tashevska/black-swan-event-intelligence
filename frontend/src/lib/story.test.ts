@@ -6,6 +6,7 @@ import {
   longshotHeadline,
   negativeShare,
   notableSegments,
+  robustness,
   structureFindings,
   topBlackSwans,
   watchlistExamples,
@@ -87,6 +88,16 @@ describe("structureFindings and notableSegments", () => {
   it("keeps only clearly mispriced segments, largest first", () => {
     expect(notableSegments(cal).map((g) => g.category)).toEqual(["Crypto", "Elections"]);
   });
+
+  it("always includes the largest segment in each direction", () => {
+    const over = (category: string, n: number) =>
+      ({ ...curve(stats({ n, rate: 0.02, ci_low: 0.01, ci_high: 0.03 })), category, structure: "pick_one" as const });
+    const many = calibration({
+      segments: [over("A", 1400), over("B", 900), over("C", 600),
+        { ...curve(stats({ n: 300, rate: 0.12, ci_low: 0.08, ci_high: 0.16 })), category: "Crypto", structure: "ladder" }],
+    });
+    expect(notableSegments(many, 3).map((g) => g.category)).toEqual(["A", "B", "Crypto"]);
+  });
 });
 
 describe("topBlackSwans", () => {
@@ -120,5 +131,48 @@ describe("watchlistExamples and formatScope", () => {
     expect(formatScope("Crypto · ladder")).toBe("Crypto · Threshold ladder");
     expect(formatScope("All categories · pick_one")).toBe("All categories · Pick one of many");
     expect(formatScope("Politics")).toBe("Politics");
+  });
+});
+
+describe("robustness", () => {
+  const check = (tradeLs: Partial<GroupStats>, midLs: Partial<GroupStats>, tight = 5000, premium = 0.005) => ({
+    max_spread: 0.1, markets: 9000, with_quotes: 8000, tight_quotes: tight, mean_premium: premium,
+    premium_by_bucket: [],
+    by_trade: curve(stats(tradeLs), [bucket(0, 0.02, 0.01, 0.005, [0.003, 0.02]), bucket(0.5, 0.6, 0.55, 0.52, [0.45, 0.6])]),
+    by_mid: curve(stats(midLs), [bucket(0, 0.02, 0.01, 0.012, [0.005, 0.02]), bucket(0.5, 0.6, 0.54, 0.52, [0.45, 0.6])]),
+  });
+  const overpricedOverall = curve(stats({ mean_price: 0.025, rate: 0.02, ci_low: 0.016, ci_high: 0.024 }));
+
+  it("holds when midpoints give the same verdict as the headline", () => {
+    const cal = calibration({
+      overall: overpricedOverall,
+      midpoint_check: check({}, { mean_price: 0.045, rate: 0.02, ci_low: 0.015, ci_high: 0.03 }),
+    });
+    const r = robustness(cal)!;
+    expect(r.holds).toBe(true);
+    expect(r.summary).toContain("0.5 pts above");
+    expect(r.summary).toContain("consistent with the headline");
+    expect(longshotHeadline(cal)).toMatchObject({ robust: true, title: expect.stringMatching(/less often than the price says/) });
+  });
+
+  it("softens the headline when the gap disappears on midpoints", () => {
+    const cal = calibration({
+      overall: overpricedOverall,
+      midpoint_check: check({ rate: 0.02, ci_low: 0.015, ci_high: 0.03 }, { mean_price: 0.029, rate: 0.025, ci_low: 0.019, ci_high: 0.033 }),
+    });
+    const r = robustness(cal)!;
+    expect(r.holds).toBe(false);
+    expect(r.summary).toMatch(/while across all markets they happened less often than priced/);
+    expect([r.belowTrade, r.groupsTrade, r.belowMid, r.groupsMid]).toEqual([2, 2, 1, 2]);
+    const h = longshotHeadline(cal);
+    expect(h.robust).toBe(false);
+    expect(h.title).toMatch(/about as often as the price says, if slightly less/);
+  });
+
+  it("describes a negative premium and stays silent without enough quoted markets", () => {
+    const r = robustness(calibration({ midpoint_check: check({}, {}, 5000, -0.003) }))!;
+    expect(r.summary).toContain("0.3 pts below");
+    expect(robustness(calibration())).toBeNull();
+    expect(robustness(calibration({ midpoint_check: check({}, {}, 100) }))).toBeNull();
   });
 });

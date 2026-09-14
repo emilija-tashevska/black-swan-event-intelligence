@@ -13,7 +13,7 @@ import aiosqlite
 
 import config
 import database as dbq
-from calibration import bucket_index, summarize
+from calibration import bucket_index, midpoint_check, summarize
 from collector import CategoryResolver
 from kalshi import KalshiClient
 from models import to_count, to_dollars
@@ -30,14 +30,16 @@ MIN_GROUP_EVENTS = 10
 
 
 def current_price(m: dict) -> tuple[float, str] | None:
-    """Tight order-book midpoint if available (it reflects now), else last trade."""
+    """Tight order-book midpoint if available (it reflects now), else the last
+    trade, but only if something traded in the past 24 hours; an older last
+    trade can be far from where the market is."""
     bid = to_dollars(m.get("yes_bid_dollars"))
     ask = to_dollars(m.get("yes_ask_dollars"))
     tight = bid is not None and ask is not None and 0 <= ask - bid <= config.MAX_QUOTE_SPREAD + 1e-9
     if tight and ask > 0:
         return (bid + ask) / 2, "quote"
     last = to_dollars(m.get("last_price_dollars"))
-    if last:
+    if last and to_count(m.get("volume_24h_fp")) > 0:
         return last, "last_trade"
     return None
 
@@ -135,11 +137,18 @@ def assess(base: dict | None) -> str:
 
 async def build_calibration(db: aiosqlite.Connection) -> dict:
     rows = await dbq.scored_outcomes(db)
-    return summarize(
+    result = summarize(
         (r["category"], r["structure"], r["event_ticker"], r["prediction_price"],
          bool(r["resolved_yes"]))
         for r in rows
     )
+    # Only markets priced from an actual trade can differ from their midpoint.
+    result["midpoint_check"] = midpoint_check(
+        ((r["event_ticker"], r["prediction_price"], bool(r["resolved_yes"]),
+          r["yes_bid"], r["yes_ask"]) for r in rows if r["prediction_source"] == "trade"),
+        config.MAX_QUOTE_SPREAD,
+    )
+    return result
 
 
 async def build_watchlist(db: aiosqlite.Connection, calibration: dict | None = None) -> dict:

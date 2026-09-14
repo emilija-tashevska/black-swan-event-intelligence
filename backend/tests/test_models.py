@@ -25,9 +25,22 @@ def test_parses_real_historical_candlestick_payload():
     assert c.contracts_traded() == 1.0
 
 
-def test_implied_probability_falls_back_to_mean_then_previous():
+def test_implied_probability_falls_back_to_mean_but_never_to_a_stale_previous_trade():
     assert CandlestickPrice(close=None, mean="0.04", previous="0.09").implied_probability() == 0.04
-    assert CandlestickPrice(close=None, mean=None, previous="0.09").implied_probability() == 0.09
+    # "previous" is the last trade before the period, possibly weeks old
+    assert CandlestickPrice(close=None, mean=None, previous="0.09").implied_probability() is None
+
+
+def test_quiet_day_uses_the_live_book_not_the_stale_last_trade():
+    # Real case: KXUSGASCPI-26APR10-T320 last traded at 2c, but the book that day was 83c/90c
+    c = Candlestick.model_validate({
+        "end_period_ts": 1, "volume_fp": "0.00",
+        "price": {"previous_dollars": "0.0200"},
+        "yes_bid": {"close_dollars": "0.8300"}, "yes_ask": {"close_dollars": "0.9000"},
+    })
+    assert c.implied_probability(max_spread=0.10) == (pytest.approx(0.865), "quote")
+    wide = c.model_copy(update={"yes_ask": c.yes_ask.model_copy(update={"close_dollars": "0.99"})})
+    assert wide.implied_probability(max_spread=0.10) is None
     assert CandlestickPrice().implied_probability() is None
 
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { GapChart, StatusLegend, StructureLongshotChart } from "@/components/charts";
 import type { BlackSwan, Calibration, Meta, Stats, Watchlist } from "@/lib/api";
 import { STRUCTURE_HELP, STRUCTURE_LABEL } from "@/lib/calibration";
@@ -9,6 +10,8 @@ import {
   gapRows,
   negativeShare,
   longshotHeadline,
+  robustness,
+  type Robustness,
   notableSegments,
   structureFindings,
   formatScope,
@@ -50,6 +53,54 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub: string 
   );
 }
 
+type Basis = "all" | "trade" | "mid";
+
+function GapPanel({ calibration, check }: { calibration: Calibration; check: Robustness | null }) {
+  const [basis, setBasis] = useState<Basis>("all");
+  const buckets =
+    basis === "all" || !calibration.midpoint_check
+      ? calibration.overall.buckets
+      : basis === "trade"
+        ? calibration.midpoint_check.by_trade.buckets
+        : calibration.midpoint_check.by_mid.buckets;
+  const options: { id: Basis; label: string }[] = [
+    { id: "all", label: "All scored markets" },
+    { id: "trade", label: "Traded prices" },
+    { id: "mid", label: "Bid/ask midpoints" },
+  ];
+  return (
+    <div className="space-y-3">
+      {check && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">Price basis:</span>
+          <div className="inline-flex rounded-md border border-border p-0.5" role="group" aria-label="Price basis">
+            {options.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => setBasis(o.id)}
+                aria-pressed={basis === o.id}
+                className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                  basis === o.id ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          {basis !== "all" && (
+            <span className="text-xs text-muted-foreground">
+              same {check.markets.toLocaleString()} markets that traded that day with a tight book
+            </span>
+          )}
+        </div>
+      )}
+      <StatusLegend />
+      <GapChart rows={gapRows(buckets)} />
+    </div>
+  );
+}
+
 function LinkButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
     <button type="button" onClick={onClick} className="text-sm font-medium text-accent hover:underline">
@@ -66,6 +117,7 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
   const headline = longshotHeadline(calibration);
   const ls = calibration.overall.longshots;
   const rows = gapRows(calibration.overall.buckets);
+  const check = robustness(calibration);
   const lessBuckets = rows.filter((r) => r.status === "less");
   const moreBuckets = rows.filter((r) => r.status === "more");
   const findings = structureFindings(calibration);
@@ -84,7 +136,7 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
         <h2 className="mt-2 max-w-3xl text-2xl sm:text-3xl font-semibold tracking-tight leading-tight">{headline.title}</h2>
         <p className="mt-3 max-w-3xl text-muted-foreground leading-relaxed">
           {headline.detail}
-          {headline.verdict === "overpriced" && headline.ratio != null && (
+          {headline.verdict === "overpriced" && headline.robust && headline.ratio != null && (
             <> Buying cheap YES contracts paid out about <strong className="text-foreground">{headline.ratio.toFixed(1)}×</strong> as often as the price implied.</>
           )}
         </p>
@@ -127,9 +179,9 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
       <Section
         step={2}
         title={
-          headline.verdict === "overpriced"
+          headline.verdict === "overpriced" && headline.robust
             ? "But across all markets, cheap YES contracts came true less often than priced"
-            : "How prices compare with what happened, across every market"
+            : "Across every market, prices were close to what happened"
         }
       >
         <p className="max-w-3xl text-sm text-muted-foreground leading-relaxed">
@@ -137,8 +189,7 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
           didn&apos;t happen. So every resolved market, YES and NO, is grouped by its price a week before close, and each group&apos;s
           hit rate is compared with its price. A dot on the zero line means the price was honest.
         </p>
-        <StatusLegend />
-        <GapChart rows={rows} />
+        <GapPanel calibration={calibration} check={check} />
         <p className="max-w-3xl text-sm text-muted-foreground leading-relaxed">
           {lessBuckets.length > 0 && (
             <>
@@ -146,18 +197,42 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
               ({lessBuckets.map((r) => `${r.label}%`).join(", ")}){moreBuckets.length === 0 ? " and none clearly more often" : ""}.{" "}
             </>
           )}
-          {negativeShare(rows) >= 0.7 && (
-            <>
-              {Math.round(negativeShare(rows) * rows.length)} of {rows.length} dots sit below zero, at both cheap and expensive
-              prices. That suggests the YES side trades a little rich overall, rather than the classic &ldquo;longshots
-              overpriced, favourites underpriced&rdquo; pattern.
-            </>
-          )}
+          {negativeShare(rows) >= 0.7 &&
+            (check && check.belowMid / Math.max(check.groupsMid, 1) < 0.6 ? (
+              <>
+                {Math.round(negativeShare(rows) * rows.length)} of {rows.length} dots sit a little below zero, but most of that tilt
+                comes from where trades happen: traded prices sit above the bid/ask midpoint, and on midpoints only{" "}
+                {check.belowMid} of {check.groupsMid} groups are below zero.
+              </>
+            ) : (
+              <>
+                {Math.round(negativeShare(rows) * rows.length)} of {rows.length} dots sit below zero, at both cheap and expensive
+                prices. That suggests the YES side trades a little rich overall, rather than the classic &ldquo;longshots
+                overpriced, favourites underpriced&rdquo; pattern.
+              </>
+            ))}
         </p>
+        {check && (
+          <div className="rounded-lg bg-muted/40 p-4">
+            <p className="text-sm font-medium">
+              Robustness check: {check.holds ? "the longshot finding holds on bid/ask midpoints" : "the longshot gap mostly disappears on bid/ask midpoints"}
+            </p>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground leading-relaxed">{check.summary}</p>
+          </div>
+        )}
         <LinkButton onClick={() => onNavigate("calibration")}>Explore the calibration curve</LinkButton>
       </Section>
 
-      <Section step={3} title="It depends on how the market is built">
+      <Section
+        step={3}
+        title={
+          findings.some((f) => f.verdict === "overpriced" || f.verdict === "underpriced")
+            ? "It depends on how the market is built"
+            : segments.length > 0
+              ? "By market type prices held up; the gaps are in specific corners"
+              : "Prices held up across market types"
+        }
+      >
         <p className="max-w-3xl text-sm text-muted-foreground leading-relaxed">
           A 2% nominee in a seven-way award race and a 2% standalone yes/no question aren&apos;t the same bet. Each event is
           labelled by structure, and longshots (priced under {formatPct(calibration.longshot_max_price, 0)}) are compared within each type.
@@ -227,7 +302,15 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
         <h2 className="text-sm font-semibold">Read with care</h2>
         <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-muted-foreground leading-relaxed">
           <li>Ranges are 95% intervals widened for markets that share an event, but related events (e.g. daily crypto ladders on the same coin) can still move together.</li>
-          <li>Prices are traded prices. If most trades hit the ask, YES prices sit slightly above the true midpoint, which could explain part of the &ldquo;YES trades rich&rdquo; pattern.</li>
+          {check ? (
+            <li>
+              Prices are same-day trades or tight bid/ask midpoints; markets with neither are left out. Traded prices sat{" "}
+              {check.premium == null ? "--" : `${check.premium >= 0 ? "+" : ""}${(check.premium * 100).toFixed(1)} pts`} from the
+              midpoint on average, and the robustness check above shows whether that changes the conclusion.
+            </li>
+          ) : (
+            <li>Prices are same-day trades or tight bid/ask midpoints. If most trades hit the ask, traded YES prices sit slightly above the midpoint.</li>
+          )}
           <li>Base rates describe groups of past markets, not the odds of any single open market. Nothing here is financial advice.</li>
         </ul>
         <div className="mt-3">

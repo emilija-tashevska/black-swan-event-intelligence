@@ -154,3 +154,39 @@ def summarize(rows: Iterable[tuple[str, str, str, float, bool]]) -> dict:
         "structures": named(lambda c, s: c is None and s is not None),
         "segments": named(lambda c, s: c is not None and s is not None),
     }
+
+
+def midpoint_check(
+    rows: Iterable[tuple[str, float, bool, float | None, float | None]],
+    max_spread: float,
+) -> dict:
+    """Robustness check on the price basis. rows: (event, traded price, resolved
+    YES, closing YES bid, closing YES ask).
+
+    If most trades lift the ask, traded prices sit above the midpoint and YES
+    looks overpriced for a purely mechanical reason. On the subset with a tight
+    closing book, compare calibration on traded prices with calibration on
+    midpoints for the same markets."""
+    rows = list(rows)
+    subset = [
+        (event, price, yes, (bid + ask) / 2)
+        for event, price, yes, bid, ask in rows
+        if bid is not None and ask is not None and 0 <= ask - bid <= max_spread + 1e-9
+    ]
+    premium_by_bucket: dict[int, list[float]] = defaultdict(list)
+    for _, price, _, mid in subset:
+        premium_by_bucket[bucket_index(price)].append(price - mid)
+    return {
+        "max_spread": max_spread,
+        "markets": len(rows),
+        "with_quotes": sum(1 for r in rows if r[3] is not None or r[4] is not None),
+        "tight_quotes": len(subset),
+        "mean_premium": (sum(p - m for _, p, _, m in subset) / len(subset)) if subset else None,
+        "premium_by_bucket": [
+            {"lo": BUCKET_EDGES[i], "hi": BUCKET_EDGES[i + 1], "n": len(v),
+             "mean_premium": sum(v) / len(v)}
+            for i, v in sorted(premium_by_bucket.items())
+        ],
+        "by_trade": curve([(e, p, y) for e, p, y, _ in subset]),
+        "by_mid": curve([(e, m, y) for e, _, y, m in subset]),
+    }

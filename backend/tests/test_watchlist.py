@@ -12,7 +12,8 @@ SERIES = load_fixture("series.json")["series"]
 NOW = datetime(2026, 9, 13, tzinfo=UTC)
 
 
-def open_market(ticker, bid="0.0400", ask="0.0600", last="0.0500", volume="5000.00", **kw):
+def open_market(ticker, bid="0.0400", ask="0.0600", last="0.0500", volume="5000.00",
+                volume_24h="100.00", **kw):
     return {
         "ticker": ticker,
         "event_ticker": ticker.rsplit("-", 1)[0],
@@ -24,23 +25,26 @@ def open_market(ticker, bid="0.0400", ask="0.0600", last="0.0500", volume="5000.
         "yes_ask_dollars": ask,
         "last_price_dollars": last,
         "volume_fp": volume,
+        "volume_24h_fp": volume_24h,
         **kw,
     }
 
 
 @pytest.mark.parametrize(
-    ("bid", "ask", "last", "expected"),
+    ("bid", "ask", "last", "vol24", "expected"),
     [
-        ("0.0400", "0.0600", "0.2000", (0.05, "quote")),      # tight book beats stale last trade
-        ("0.0200", "0.1200", "0.0300", (0.07, "quote")),      # exactly 10c spread
-        ("0.0100", "0.5000", "0.0300", (0.03, "last_trade")),  # wide book
-        ("0.0000", "0.0000", "0.0300", (0.03, "last_trade")),  # empty book
-        (None, None, "0.0000", None),                           # never traded
+        ("0.0400", "0.0600", "0.2000", "0.00", (0.05, "quote")),       # tight book beats last trade
+        ("0.0200", "0.1200", "0.0300", "0.00", (0.07, "quote")),       # exactly 10c spread
+        ("0.0100", "0.5000", "0.0300", "12.00", (0.03, "last_trade")),  # wide book, traded
+        ("0.0000", "0.0000", "0.0300", "3.00", (0.03, "last_trade")),   # empty book, traded today
+        ("0.0100", "0.5000", "0.0300", "0.00", None),                   # wide book, stale trade
+        (None, None, "0.0300", None, None),                             # no book, no recent volume
+        (None, None, "0.0000", "5.00", None),                           # never traded
     ],
 )
-def test_current_price(bid, ask, last, expected):
-    result = watchlist.current_price(
-        {"yes_bid_dollars": bid, "yes_ask_dollars": ask, "last_price_dollars": last})
+def test_current_price(bid, ask, last, vol24, expected):
+    result = watchlist.current_price({"yes_bid_dollars": bid, "yes_ask_dollars": ask,
+                                      "last_price_dollars": last, "volume_24h_fp": vol24})
     if expected is None:
         assert result is None
     else:

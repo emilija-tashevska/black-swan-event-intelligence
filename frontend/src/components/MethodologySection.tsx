@@ -29,9 +29,14 @@ export default function MethodologySection({ meta, stats }: { meta: Meta | null;
       </Block>
       <Block title="The 7-day price">
         <p>
-          The closing price of the last daily candle that ended at least {meta?.lookback_days ?? 7} days before the market closed,
-          so it never includes later information. If nothing traded that day, the bid/ask midpoint is used when the spread
-          is 10¢ or less (marked <sup>q</sup> in the table).
+          Taken from the last daily candle that ended at least {meta?.lookback_days ?? 7} days before the market closed, so it
+          never includes later information. If contracts traded that day, it&apos;s the closing trade price. If not, it&apos;s
+          the closing bid/ask midpoint when the spread is 10¢ or less (marked <sup>q</sup> in the table). Otherwise the market
+          has no usable price and is left out.
+        </p>
+        <p>
+          The last trade from an earlier day is never used: on quiet markets it can be weeks old. An earlier version of this
+          project did use it for about 4 in 10 scored markets; one CPI market scored at 2% had a live book around 86%.
         </p>
         <p>
           <strong className="text-foreground">Black swan:</strong> a market that resolved YES with a 7-day price under the
@@ -47,6 +52,13 @@ export default function MethodologySection({ meta, stats }: { meta: Meta | null;
         <p>
           A group is called over- or under-priced only when its whole range sits on one side of its average price, with 30+
           markets from 10+ events. The Brier score summarizes accuracy across all prices (lower is better).
+        </p>
+      </Block>
+      <Block title="Robustness: traded prices vs midpoints">
+        <p>
+          A traded price can sit above or below the true midpoint depending on which side crossed the spread. As a check,
+          calibration is recomputed on markets that both traded that day and had a tight closing book, once using traded
+          prices and once using bid/ask midpoints. The Overview reports whether the longshot finding survives the switch.
         </p>
       </Block>
       <Block title="Market types">

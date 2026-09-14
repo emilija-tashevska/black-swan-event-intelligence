@@ -56,7 +56,7 @@ def db_row(ticker: str = "KXTEST-26JAN01-A", category: str = "Crypto", **overrid
     from collector import market_to_row
 
     scoring = {k: overrides.pop(k) for k in list(overrides) if k.startswith(("prediction_", "ai_"))
-               or k == "volume_at_price"}
+               or k in ("volume_at_price", "quote_checked")}
     row = market_to_row(make_market(ticker, **overrides), ticker.split("-")[0], category)
     row["_scoring"] = scoring
     return row

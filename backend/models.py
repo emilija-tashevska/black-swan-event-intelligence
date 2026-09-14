@@ -33,13 +33,10 @@ class CandlestickPrice(BaseModel):
     previous_dollars: str | None = None
 
     def implied_probability(self) -> float | None:
-        """Closing trade price for the period. Falls back to the period's mean
-        trade price, then to the last price before the period when nothing traded."""
-        for v in (
-            self.close_dollars or self.close,
-            self.mean_dollars or self.mean,
-            self.previous_dollars or self.previous,
-        ):
+        """Closing trade price for the period, falling back to its mean trade
+        price. `previous` (the last trade before the period) is deliberately
+        ignored: on quiet days it can be weeks old and far from the live book."""
+        for v in (self.close_dollars or self.close, self.mean_dollars or self.mean):
             price = to_dollars(v)
             if price is not None:
                 return price
@@ -69,15 +66,21 @@ class Candlestick(BaseModel):
     def contracts_traded(self) -> float:
         return to_count(self.volume_fp or self.volume)
 
+    def closing_quote(self) -> tuple[float | None, float | None]:
+        """Closing YES bid and ask for the period, if the book had them."""
+        return (
+            self.yes_bid.closing() if self.yes_bid else None,
+            self.yes_ask.closing() if self.yes_ask else None,
+        )
+
     def implied_probability(self, max_spread: float) -> tuple[float, str] | None:
-        """(probability, source). Prefers traded prices; when nothing has traded,
-        uses the closing YES bid/ask midpoint if the book was tight enough to be
-        informative."""
+        """(probability, source). Prefers a price traded during the period; when
+        nothing traded, uses the closing YES bid/ask midpoint if the book was
+        tight enough to be informative. Otherwise there is no current price."""
         traded = self.price.implied_probability()
         if traded is not None:
             return traded, "trade"
-        bid = self.yes_bid.closing() if self.yes_bid else None
-        ask = self.yes_ask.closing() if self.yes_ask else None
+        bid, ask = self.closing_quote()
         if bid is not None and ask is not None and 0 <= ask - bid <= max_spread + 1e-9:
             return (bid + ask) / 2, "quote"
         return None

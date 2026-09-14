@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS markets (
     prediction_source  TEXT,              -- 'trade' | 'quote'
     prediction_ts      INTEGER,
     prediction_volume  REAL,
+    -- Closing YES bid/ask of the prediction candle, for the midpoint check
+    prediction_yes_bid REAL,
+    prediction_yes_ask REAL,
+    quote_checked      INTEGER NOT NULL DEFAULT 0,
     volume_at_price    REAL,
     ai_summary         TEXT NOT NULL DEFAULT '',
     ai_model           TEXT NOT NULL DEFAULT ''
@@ -98,6 +102,17 @@ BLACK_SWAN_COLUMNS = """
 """
 
 
+# Columns added after schema v2 shipped. Additive, so existing databases are
+# migrated in place instead of being rebuilt from a multi-hour collection.
+ADDITIVE_COLUMNS = {
+    "markets": [
+        ("prediction_yes_bid", "REAL"),
+        ("prediction_yes_ask", "REAL"),
+        ("quote_checked", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+}
+
+
 class SchemaMismatchError(RuntimeError):
     pass
 
@@ -124,6 +139,12 @@ async def _init(db: aiosqlite.Connection) -> None:
             "delete the database file and re-run the pipeline."
         )
     await db.executescript(SCHEMA)
+    for table, columns in ADDITIVE_COLUMNS.items():
+        info = await (await db.execute(f"PRAGMA table_info({table})")).fetchall()
+        existing = {r[1] for r in info}
+        for name, decl in columns:
+            if name not in existing:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
     await db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     await db.commit()
 
@@ -208,12 +229,64 @@ async def set_prediction(
     source: str | None = None,
     ts: int | None = None,
     volume: float | None = None,
+    yes_bid: float | None = None,
+    yes_ask: float | None = None,
 ) -> None:
     await db.execute(
         """UPDATE markets SET prediction_status = ?, prediction_price = ?,
-                  prediction_source = ?, prediction_ts = ?, prediction_volume = ?
+                  prediction_source = ?, prediction_ts = ?, prediction_volume = ?,
+                  prediction_yes_bid = ?, prediction_yes_ask = ?, quote_checked = ?
            WHERE ticker = ?""",
-        (status, price, source, ts, volume, ticker),
+        (status, price, source, ts, volume, yes_bid, yes_ask, int(status == "ok"), ticker),
+    )
+    # Callers commit once per batch.
+
+
+async def markets_needing_quotes(
+    db: aiosqlite.Connection, limit: int | None = None,
+) -> list[aiosqlite.Row]:
+    """Scored markets from before quotes were captured at scoring time."""
+    cur = await db.execute(
+        """SELECT ticker, series_ticker, close_time, settlement_ts, prediction_ts FROM markets
+           WHERE prediction_status = 'ok' AND quote_checked = 0
+           ORDER BY close_time LIMIT ?""",
+        (limit if limit is not None else -1,),
+    )
+    return list(await cur.fetchall())
+
+
+async def reprice_stale_trades(db: aiosqlite.Connection, max_spread: float) -> dict:
+    """One-off correction for markets scored before `previous` prices were
+    dropped: a "trade" price with no contracts traded that day was a stale last
+    trade. Use the closing midpoint if the book was tight, else mark no_data.
+    Only markets whose quotes have been fetched are touched; idempotent."""
+    stale = """prediction_status = 'ok' AND prediction_source = 'trade'
+               AND COALESCE(prediction_volume, 0) = 0 AND quote_checked = 1"""
+    tight = """prediction_yes_bid IS NOT NULL AND prediction_yes_ask IS NOT NULL
+               AND prediction_yes_ask - prediction_yes_bid BETWEEN 0 AND :spread"""
+    params = {"spread": max_spread + 1e-9}
+    to_quote = await db.execute(
+        f"""UPDATE markets SET prediction_price = (prediction_yes_bid + prediction_yes_ask) / 2,
+                   prediction_source = 'quote', volume_at_price = NULL
+            WHERE {stale} AND {tight}""",
+        params,
+    )
+    to_no_data = await db.execute(
+        f"""UPDATE markets SET prediction_status = 'no_data', prediction_price = NULL,
+                   prediction_source = NULL, volume_at_price = NULL
+            WHERE {stale}""",
+    )
+    await db.commit()
+    return {"repriced_from_book": to_quote.rowcount, "dropped_no_price": to_no_data.rowcount}
+
+
+async def set_quote(
+    db: aiosqlite.Connection, ticker: str, yes_bid: float | None, yes_ask: float | None,
+) -> None:
+    await db.execute(
+        """UPDATE markets SET prediction_yes_bid = ?, prediction_yes_ask = ?, quote_checked = 1
+           WHERE ticker = ?""",
+        (yes_bid, yes_ask, ticker),
     )
     # Callers commit once per batch.
 
@@ -351,7 +424,8 @@ async def scored_outcomes(db: aiosqlite.Connection) -> list[aiosqlite.Row]:
     """Every scored, resolved market: the raw material for calibration."""
     cur = await db.execute(
         f"""SELECT m.category, COALESCE(e.structure, 'unknown') AS structure, m.event_ticker,
-                   m.prediction_price, m.result = 'yes' AS resolved_yes
+                   m.prediction_price, m.prediction_source, m.result = 'yes' AS resolved_yes,
+                   m.prediction_yes_bid AS yes_bid, m.prediction_yes_ask AS yes_ask
             FROM markets m LEFT JOIN events e USING (event_ticker)
             WHERE m.{RESOLVED} AND m.prediction_status = 'ok'"""
     )

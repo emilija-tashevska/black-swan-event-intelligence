@@ -96,7 +96,19 @@ export interface CalibrationCurve {
 
 export type CalibrationGroup = CalibrationCurve & { category: string | null; structure: Structure | null };
 
+export interface MidpointCheck {
+  max_spread: number;
+  markets: number;
+  with_quotes: number;
+  tight_quotes: number;
+  mean_premium: number | null;
+  premium_by_bucket: { lo: number; hi: number; n: number; mean_premium: number }[];
+  by_trade: CalibrationCurve;
+  by_mid: CalibrationCurve;
+}
+
 export interface Calibration {
+  midpoint_check?: MidpointCheck;
   bucket_edges: number[];
   longshot_max_price: number;
   min_group_markets: number;

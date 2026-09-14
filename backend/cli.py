@@ -29,7 +29,7 @@ from watchlist import collect_open_markets
 
 logger = logging.getLogger("cli")
 
-STEPS = ("collect", "score", "structure", "depth", "headlines", "watchlist", "export")
+STEPS = ("collect", "score", "quotes", "structure", "depth", "headlines", "watchlist", "export")
 
 
 def claude_client() -> anthropic.AsyncAnthropic:
@@ -40,13 +40,19 @@ def claude_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(default_headers=headers)
 
 
-async def run_steps(steps: list[str], force_headlines: bool = False) -> None:
+async def run_steps(
+    steps: list[str], force_headlines: bool = False, quote_limit: int | None = None,
+) -> None:
     async with dbq.connect() as db, KalshiClient() as kalshi:
         if "collect" in steps:
             resolver = await collector.CategoryResolver.load(kalshi)
             logger.info("Collect: %s", await collector.collect_markets(kalshi, db, resolver))
         if "score" in steps:
             logger.info("Score: %s", await collector.score_predictions(kalshi, db))
+        if "quotes" in steps:
+            logger.info("Quotes: %s", await collector.backfill_quotes(kalshi, db, quote_limit))
+            logger.info("Stale prices: %s",
+                        await dbq.reprice_stale_trades(db, config.MAX_QUOTE_SPREAD))
         if "structure" in steps:
             logger.info("Structure: %s", await enrich_structures(kalshi, db))
         if "depth" in steps:
@@ -79,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(step, help=f"run only the {step} step")
         if step == "headlines":
             p.add_argument("--force", action="store_true", help="regenerate existing headlines")
+        if step == "quotes":
+            p.add_argument("--limit", type=int, help="backfill at most this many markets")
     stats = sub.add_parser("stats", help="print summary stats from the database")
     stats.add_argument("--threshold", type=float, default=config.DEFAULT_THRESHOLD)
     args = parser.parse_args(argv)
@@ -91,7 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "run":
         asyncio.run(run_steps(list(STEPS)))
     else:
-        asyncio.run(run_steps([args.command], force_headlines=getattr(args, "force", False)))
+        asyncio.run(run_steps(
+            [args.command],
+            force_headlines=getattr(args, "force", False),
+            quote_limit=getattr(args, "limit", None),
+        ))
     return 0
 
 

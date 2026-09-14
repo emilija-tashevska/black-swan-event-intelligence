@@ -213,6 +213,8 @@ class Score:
     source: str | None = None
     ts: int | None = None
     volume: float | None = None
+    yes_bid: float | None = None
+    yes_ask: float | None = None
 
 
 NO_DATA = Score("no_data")
@@ -241,7 +243,8 @@ async def score_market(
     if candle is None or implied is None:
         return NO_DATA
     price, source = implied
-    return Score("ok", price, source, candle.end_period_ts, candle.contracts_traded())
+    bid, ask = candle.closing_quote()
+    return Score("ok", price, source, candle.end_period_ts, candle.contracts_traded(), bid, ask)
 
 
 async def score_predictions(client: KalshiClient, db: aiosqlite.Connection) -> dict:
@@ -272,6 +275,7 @@ async def score_predictions(client: KalshiClient, db: aiosqlite.Connection) -> d
                 continue
             await dbq.set_prediction(
                 db, ticker, scored.status, scored.price, scored.source, scored.ts, scored.volume,
+                scored.yes_bid, scored.yes_ask,
             )
             counts[scored.status] += 1
             if scored.source == "quote":
@@ -281,6 +285,48 @@ async def score_predictions(client: KalshiClient, db: aiosqlite.Connection) -> d
                 counts["black_swans"] += 1
         await db.commit()
         logger.info("Scored %d / %d %s", start + len(batch), len(markets), counts)
+    return counts
+
+
+# ── Backfill: closing quotes for markets scored before they were captured ──
+
+async def backfill_quotes(
+    client: KalshiClient, db: aiosqlite.Connection, limit: int | None = None,
+) -> dict:
+    """Re-fetch the prediction candle for scored markets missing bid/ask. The
+    candle ending at the stored prediction time is used, so the quote lines up
+    with the price already scored. Fetch errors leave the market for a later run."""
+    cutoff_ts = parse_ts(await client.get_cutoff_ts())
+    markets = await dbq.markets_needing_quotes(db, limit)
+    logger.info("Backfilling quotes for %d markets", len(markets))
+    sem = asyncio.Semaphore(SCORING_CONCURRENCY)
+
+    async def one(m) -> tuple[str, tuple[float | None, float | None] | None]:
+        as_of = lookback_ts(parse_ts(m["close_time"]))
+        async with sem:
+            try:
+                candles = await client.get_candlesticks(
+                    m["ticker"], as_of - 3 * DAY, as_of,
+                    historical=is_historical(m, cutoff_ts), series_ticker=m["series_ticker"],
+                )
+            except Exception as e:
+                logger.warning("Quote fetch failed for %s: %s", m["ticker"], e)
+                return m["ticker"], None
+        candle = next((c for c in candles if c.end_period_ts == m["prediction_ts"]), None)
+        candle = candle or pick_prediction_candle(candles, as_of)
+        return m["ticker"], candle.closing_quote() if candle else (None, None)
+
+    counts = {"with_quote": 0, "no_quote": 0, "errors": 0}
+    for start in range(0, len(markets), SCORING_BATCH):
+        batch = markets[start : start + SCORING_BATCH]
+        for ticker, quote in await asyncio.gather(*(one(m) for m in batch)):
+            if quote is None:
+                counts["errors"] += 1
+                continue
+            await dbq.set_quote(db, ticker, *quote)
+            counts["with_quote" if None not in quote else "no_quote"] += 1
+        await db.commit()
+        logger.info("Quotes: %d / %d %s", start + len(batch), len(markets), counts)
     return counts
 
 
