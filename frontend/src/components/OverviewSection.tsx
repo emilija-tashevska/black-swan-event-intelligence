@@ -9,7 +9,7 @@ import { formatCompact, formatDate, formatPct } from "@/lib/format";
 import {
   gapRows,
   negativeShare,
-  longshotHeadline,
+  longshotVerdict,
   robustness,
   type Robustness,
   notableSegments,
@@ -114,7 +114,7 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
     return <p className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">Loading findings…</p>;
   }
 
-  const headline = longshotHeadline(calibration);
+  const headline = longshotVerdict(calibration);
   const ls = calibration.overall.longshots;
   const rows = gapRows(calibration.overall.buckets);
   const check = robustness(calibration);
@@ -131,16 +131,9 @@ export default function OverviewSection({ calibration, stats, swans, watchlist, 
     <div className="space-y-6">
       <section className="rounded-xl border border-accent/30 bg-accent/5 p-5 sm:p-6">
         <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          The short answer{period && <> · markets closing {period}</>}
+          At a glance{period && <> · markets closing {period}</>}
         </p>
-        <h2 className="mt-2 max-w-3xl text-2xl sm:text-3xl font-semibold tracking-tight leading-tight">{headline.title}</h2>
-        <p className="mt-3 max-w-3xl text-muted-foreground leading-relaxed">
-          {headline.detail}
-          {headline.verdict === "overpriced" && headline.robust && headline.ratio != null && (
-            <> Buying cheap YES contracts paid out about <strong className="text-foreground">{headline.ratio.toFixed(1)}×</strong> as often as the price implied.</>
-          )}
-        </p>
-        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Kpi label="Markets scored" value={calibration.overall.n.toLocaleString()} sub={`from ${calibration.overall.events.toLocaleString()} events, YES and NO`} />
           <Kpi label="Black swans" value={stats.total_black_swans.toLocaleString()} sub={`YES outcomes priced under ${formatPct(stats.threshold, 0)}`} />
           <Kpi label="Longshots priced" value={formatPct(ls.mean_price)} sub="average, a week before close" />

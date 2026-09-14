@@ -51,39 +51,17 @@ export function negativeShare(rows: GapRow[]): number {
   return rows.length ? rows.filter((r) => r.gap < 0).length / rows.length : 0;
 }
 
-export interface Headline {
+export interface LongshotVerdict {
   verdict: Verdict;
   /** False when the verdict doesn't survive the bid/ask midpoint check. */
   robust: boolean;
   ratio: number | null;
-  title: string;
-  detail: string;
 }
 
-export function longshotHeadline(calibration: Calibration): Headline {
+export function longshotVerdict(calibration: Calibration): LongshotVerdict {
   const ls = calibration.overall.longshots;
-  const v = verdict(ls);
-  const r = ratio(ls);
-  const pct = (x: number | null) => (x == null ? "--" : `${(x * 100).toFixed(1)}%`);
-  const cutoff = `${Math.round(calibration.longshot_max_price * 100)}%`;
-  const detail =
-    `Markets priced under ${cutoff} a week before close averaged ${pct(ls.mean_price)}; ` +
-    `${pct(ls.rate)} of them actually happened (${ls.yes.toLocaleString()} of ${ls.n.toLocaleString()}).`;
   const check = robustness(calibration);
-  const robust = check ? check.holds : true;
-  const title =
-    v === "overpriced"
-      ? robust
-        ? "Unlikely events do happen, but less often than the price says."
-        : "Unlikely events happen about as often as the price says, if slightly less."
-      : v === "underpriced"
-        ? robust
-          ? "Unlikely events happen more often than the price says."
-          : "Unlikely events happen about as often as the price says, if slightly more."
-        : v === "in_line"
-          ? "Unlikely events happen about as often as the price says."
-          : "Not enough history yet to judge longshot prices.";
-  return { verdict: v, robust, ratio: r, title, detail };
+  return { verdict: verdict(ls), robust: check ? check.holds : true, ratio: ratio(ls) };
 }
 
 export interface StructureFinding {

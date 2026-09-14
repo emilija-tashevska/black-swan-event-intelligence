@@ -3,7 +3,7 @@ import type { BlackSwan, Calibration, CalibrationBucket, CalibrationCurve, Group
 import {
   formatScope,
   gapRows,
-  longshotHeadline,
+  longshotVerdict,
   negativeShare,
   notableSegments,
   robustness,
@@ -48,19 +48,14 @@ describe("gapRows", () => {
   });
 });
 
-describe("longshotHeadline", () => {
-  it("says longshots happened less often when the range sits below the price", () => {
-    const h = longshotHeadline(calibration({ overall: curve(stats({ mean_price: 0.028, rate: 0.022, ci_low: 0.018, ci_high: 0.027, yes: 151, n: 6732 })) }));
-    expect(h.verdict).toBe("overpriced");
-    expect(h.title).toMatch(/less often/);
-    expect(h.detail).toContain("151 of 6,732");
-    expect(h.ratio).toBeCloseTo(0.786, 2);
-  });
-
-  it("adapts the story when the data changes", () => {
-    expect(longshotHeadline(calibration()).title).toMatch(/about as often/);
-    expect(longshotHeadline(calibration({ overall: curve(stats({ rate: 0.09, ci_low: 0.07, ci_high: 0.11 })) })).title).toMatch(/more often/);
-    expect(longshotHeadline(calibration({ overall: curve(stats({ n: 5 })) })).title).toMatch(/Not enough/);
+describe("longshotVerdict", () => {
+  it("judges longshots from the overall curve", () => {
+    const v = longshotVerdict(calibration({ overall: curve(stats({ mean_price: 0.028, rate: 0.022, ci_low: 0.018, ci_high: 0.027 })) }));
+    expect(v).toMatchObject({ verdict: "overpriced", robust: true });
+    expect(v.ratio).toBeCloseTo(0.786, 2);
+    expect(longshotVerdict(calibration()).verdict).toBe("in_line");
+    expect(longshotVerdict(calibration({ overall: curve(stats({ rate: 0.09, ci_low: 0.07, ci_high: 0.11 })) })).verdict).toBe("underpriced");
+    expect(longshotVerdict(calibration({ overall: curve(stats({ n: 5 })) })).verdict).toBe("too_few");
   });
 });
 
@@ -152,7 +147,7 @@ describe("robustness", () => {
     expect(r.holds).toBe(true);
     expect(r.summary).toContain("0.5 pts above");
     expect(r.summary).toContain("consistent with the headline");
-    expect(longshotHeadline(cal)).toMatchObject({ robust: true, title: expect.stringMatching(/less often than the price says/) });
+    expect(longshotVerdict(cal)).toMatchObject({ verdict: "overpriced", robust: true });
   });
 
   it("softens the headline when the gap disappears on midpoints", () => {
@@ -164,9 +159,7 @@ describe("robustness", () => {
     expect(r.holds).toBe(false);
     expect(r.summary).toMatch(/while across all markets they happened less often than priced/);
     expect([r.belowTrade, r.groupsTrade, r.belowMid, r.groupsMid]).toEqual([2, 2, 1, 2]);
-    const h = longshotHeadline(cal);
-    expect(h.robust).toBe(false);
-    expect(h.title).toMatch(/about as often as the price says, if slightly less/);
+    expect(longshotVerdict(cal)).toMatchObject({ verdict: "overpriced", robust: false });
   });
 
   it("describes a negative premium and stays silent without enough quoted markets", () => {
